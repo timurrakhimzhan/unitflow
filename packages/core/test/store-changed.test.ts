@@ -43,6 +43,22 @@ describe("Store.changed", () => {
     }).pipe(Effect.provide(Registry.layer)),
   );
 
+  it.effect("can pipe directly into Event.handler", () =>
+    Effect.gen(function* () {
+      const count = Store.make(0);
+      const tripled = Store.make(0);
+
+      yield* count.pipe(
+        Store.changed,
+        Event.handler((value) => Store.set(tripled, value * 3)),
+      );
+
+      yield* Registry.allSettled(Store.set(count, 7));
+
+      assert.strictEqual(yield* Store.get(tripled), 21);
+    }).pipe(Effect.provide(Registry.layer)),
+  );
+
   it.effect("can be consumed with Event.waitFor", () =>
     Effect.gen(function* () {
       const count = Store.make(0);

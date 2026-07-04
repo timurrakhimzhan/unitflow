@@ -304,6 +304,15 @@ export function waitFor(
   return awaitFirst(matches, resolved?.timeout);
 }
 
+type HandlerInput<A> = Source<A> | Effect.Effect<Source<A>, any, any>;
+
+type HandlerResult<A, R, Input extends HandlerInput<A>> =
+  Input extends Effect.Effect<infer E extends Source<A>, infer EffE, infer EffR>
+    ? Effect.Effect<E, EffE, EffR | R | Registry>
+    : Input extends Source<A>
+      ? Effect.Effect<Input, never, R | Registry>
+      : never;
+
 /**
  * Pipe-combinator for "on event source, do effect": forks a sequential
  * pipeline that runs `handle` for every emit, in the owner scope via
@@ -332,10 +341,7 @@ export const handler =
   <A = any, R = never>(
     handle: (value: A) => Effect.Effect<unknown, never, R>,
     options?: { readonly concurrency?: "unbounded" },
-  ): {
-    <E extends Source<A>>(event: E): Effect.Effect<E, never, R | Registry>;
-    <E extends Event<A>>(event: E): Effect.Effect<E, never, R | Registry>;
-  } => {
+  ): (<Input extends HandlerInput<A>>(event: Input) => HandlerResult<A, R, Input>) => {
     const attachSource = (source: Source<A>): Effect.Effect<void, never, R | Registry> => {
       if (isCombined(source)) {
         return Effect.forEach(
@@ -370,10 +376,11 @@ export const handler =
           })
         : Registry.run(stream(source).pipe(Stream.mapEffect(handle)));
     };
-    const attach = (event: Source<A>): Effect.Effect<Source<A>, never, R | Registry> =>
-      Effect.as(attachSource(event), event);
-    return attach as {
-      <E extends Source<A>>(event: E): Effect.Effect<E, never, R | Registry>;
-      <E extends Event<A>>(event: E): Effect.Effect<E, never, R | Registry>;
-    };
+    const attach = (
+      eventOrEffect: Source<A> | Effect.Effect<Source<A>, unknown, unknown>,
+    ): Effect.Effect<Source<A>, unknown, unknown> =>
+      Effect.isEffect(eventOrEffect)
+        ? Effect.flatMap(eventOrEffect, attach)
+        : Effect.as(attachSource(eventOrEffect), eventOrEffect);
+    return attach as <Input extends HandlerInput<A>>(event: Input) => HandlerResult<A, R, Input>;
   };
