@@ -8,24 +8,24 @@ recipe for observable writes.
 Use Resource for async reads.
 
 ```ts
-const projects = yield* Resource.make({
-  handler: () => client.projectsList(),
-});
+const projects = yield* Resource.make(client.projectsList());
 
 const filtered = yield* Resource.make({
   stores: { query },
   handler: ({ query }) => client.searchProjects({ query }),
-}).pipe(Resource.debounce("250 millis"));
+});
 
-const reloadProjects = projects.reload;
+const refreshProjects = projects.refresh;
+const projectState = projects.state;
 ```
 
-The resource is store-shaped, so returning it in `ui` or `outputs` exposes the
-current `AsyncResult`. Render `_tag` (`Waiting`, `Success`, `Failure`), not
-nullable data plus separate booleans.
+Return `resource.state` from `ui` or `outputs` to expose the current
+`AsyncResult`. Refreshes keep the previous success while waiting or after a
+failed reload, so flaky reads do not blank the screen.
 
-`Resource.debounce` debounces reloads caused by dependency store changes. The
-initial load and explicit `resource.reload` event stay immediate.
+Use `Resource.refetchOn(...)`, `Resource.repeat(schedule)`, or
+`Resource.paginated(...)` when a read should reload from events, time, or
+load-more pagination.
 
 ## Mutation
 
@@ -33,6 +33,12 @@ Use Mutation for observable writes.
 
 ```ts
 const save = yield* Mutation.make((input: SaveInput) => client.saveProject(input));
+const saveState = save.state;
+const savedProjects = save.done;
+
+const saveAndRefresh = yield* Mutation.make((input: SaveInput) =>
+  client.saveProject(input),
+).pipe(Mutation.invalidates(projects));
 
 const submit = yield* Event.make<SaveInput>().pipe(
   Event.handler((input) =>

@@ -1,6 +1,8 @@
 import { type Category, type Product } from "./catalog";
 import { ProductSearchModel } from "./model";
-import { Resource, View } from "@unitflow/react";
+import { View } from "@unitflow/react";
+import * as Option from "effect/Option";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 
 const categories: ReadonlyArray<Category> = ["all", "hardware", "software", "services"];
 
@@ -10,23 +12,24 @@ const formatPrice = (value: number): string =>
 const Results = ({
   results,
 }: {
-  readonly results: Resource.AsyncResult<ReadonlyArray<Product>, unknown>;
+  readonly results: AsyncResult.AsyncResult<ReadonlyArray<Product>, unknown>;
 }) => {
-  if (results._tag === "Waiting") {
-    return <div className="result-state">Loading</div>;
+  const value = AsyncResult.value(results);
+  if (Option.isNone(value)) {
+    return AsyncResult.isFailure(results) ? (
+      <div className="result-state error">Catalog unavailable</div>
+    ) : (
+      <div className="result-state">Loading</div>
+    );
   }
 
-  if (results._tag === "Failure") {
-    return <div className="result-state error">Catalog unavailable</div>;
-  }
-
-  if (results.value.length === 0) {
+  if (value.value.length === 0) {
     return <div className="result-state">No matches</div>;
   }
 
   return (
     <ul className="product-grid">
-      {results.value.map((product) => (
+      {value.value.map((product) => (
         <li className="product-card" key={product.id}>
           <div>
             <strong>{product.title}</strong>

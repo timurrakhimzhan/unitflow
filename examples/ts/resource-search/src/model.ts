@@ -11,18 +11,16 @@ export class ProductSearchModel extends Model.Service<ProductSearchModel>()(
       const category = Store.make<Category>("all", { name: "category" });
 
       const results = yield* Resource.make({
-        name: "catalogResults",
         stores: { query, category },
         handler: ({ query, category }) =>
           Effect.gen(function* () {
             const catalog = yield* CatalogApi;
             return yield* catalog.search({ query, category });
           }),
-      }).pipe(Resource.debounce("250 millis"));
-
+      });
 
       const view = Store.combine(
-        [query, category, results],
+        [query, category, results.state],
         (query, category, results) => ({
           query,
           category,
@@ -32,12 +30,12 @@ export class ProductSearchModel extends Model.Service<ProductSearchModel>()(
 
       return {
         inputs: {},
-        outputs: { results },
+        outputs: { results: results.state },
         ui: {
           view,
           setQuery: Event.setter(query, { name: "setQuery" }),
           setCategory: Event.setter(category, { name: "setCategory" }),
-          reload: results.reload,
+          reload: results.refresh,
         },
       };
     }),

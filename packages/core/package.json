@@ -19,6 +19,10 @@
       "types": "./dist/model.d.ts",
       "default": "./dist/model.js"
     },
+    "./mutation": {
+      "types": "./dist/mutation.d.ts",
+      "default": "./dist/mutation.js"
+    },
     "./registry": {
       "types": "./dist/registry.d.ts",
       "default": "./dist/registry.js"

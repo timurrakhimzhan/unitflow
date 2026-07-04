@@ -1,209 +1,262 @@
 import { assert, describe, it } from "@effect/vitest";
-import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as TestClock from "effect/testing/TestClock";
-import { Event, Model, Registry, Resource, Store } from "../src/index.js";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import { Event, Registry, Store } from "../src/index.js";
+import * as Resource from "../src/resource.js";
 
-interface UserApiShape {
-  readonly getUser: (query: string) => Effect.Effect<string, string>;
-}
+const awaitCondition = (predicate: () => boolean): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    while (!predicate()) {
+      yield* Effect.yieldNow;
+    }
+  });
 
-class UserApi extends Context.Service<UserApi, UserApiShape>()("/test/resource/UserApi") {}
-
-class UserResourceModel extends Model.Service<UserResourceModel>()(
-  "/test/resource/UserResourceModel",
-)({
-  make: () =>
-    Effect.gen(function* () {
-      const query = Store.make("a");
-      const user = yield* Resource.make({
-        name: "user",
-        stores: { query },
-        handler: ({ query }) =>
-          Effect.gen(function* () {
-            const api = yield* UserApi;
-            return yield* api.getUser(query);
-          }),
-      });
-      const setQuery = Event.setter(query);
-      const reload = user.reload;
-
-      return {
-        inputs: { setQuery, reload },
-        outputs: { query, user },
-        ui: { user, setQuery, reload },
-      };
-    }),
-}) {}
-
-const layer = (api: UserApiShape) =>
-  UserResourceModel.layer.pipe(
-    Layer.provideMerge(Layer.succeed(UserApi, api)),
-    Layer.provideMerge(Registry.layer),
+const successValue = <A, E>(result: AsyncResult.AsyncResult<A, E>): A | null =>
+  Option.getOrElse(
+    Option.map(AsyncResult.value(result), (value): A | null => value),
+    () => null,
   );
 
+/** A request that parks each run on its own deferred, so tests control when
+ * every load settles. */
+const gatedRequest = <A, E = never>() => {
+  const gates: Array<Deferred.Deferred<A, E>> = [];
+  const request = Effect.suspend(() => {
+    const gate = Deferred.makeUnsafe<A, E>();
+    gates.push(gate);
+    return Deferred.await(gate);
+  });
+  const gateAt = (index: number) => {
+    const gate = gates[index];
+    if (gate === undefined) throw new Error(`Missing gate ${index}`);
+    return gate;
+  };
+  return { gates, request, gateAt };
+};
+
 describe("Resource", () => {
-  it.effect("starts on model construction and settles into success", () =>
+  it.effect("loads eagerly once at construction", () =>
     Effect.gen(function* () {
-      const gate = yield* Deferred.make<void>();
-      const api = UserApi.of({
-        getUser: (query) => Effect.as(Deferred.await(gate), `user:${query}`),
-      });
-
-      yield* Effect.gen(function* () {
-        const model = yield* Model.get(UserResourceModel);
-        assert.deepStrictEqual(yield* Store.get(model.outputs.user), { _tag: "Waiting" });
-
-        yield* Deferred.succeed(gate, undefined);
-        yield* Registry.allSettled();
-
-        assert.deepStrictEqual(yield* Store.get(model.outputs.user), {
-          _tag: "Success",
-          value: "user:a",
-        });
-      }).pipe(Effect.provide(layer(api)));
-    }));
-
-  it.effect("reloads when dependency stores change", () =>
-    Effect.gen(function* () {
-      const calls: Array<string> = [];
-      const api = UserApi.of({
-        getUser: (query) =>
-          Effect.sync(() => {
-            calls.push(query);
-            return `user:${query}`;
-          }),
-      });
-
-      yield* Effect.gen(function* () {
-        const model = yield* Model.get(UserResourceModel);
-        yield* Registry.allSettled();
-
-        yield* Registry.allSettled(Event.emit(model.inputs.setQuery, "b"));
-
-        assert.deepStrictEqual(calls, ["a", "b"]);
-        assert.deepStrictEqual(yield* Store.get(model.outputs.user), {
-          _tag: "Success",
-          value: "user:b",
-        });
-      }).pipe(Effect.provide(layer(api)));
-    }));
-
-  it.effect("debounces dependency-triggered reloads", () =>
-    Effect.gen(function* () {
-      const calls: Array<string> = [];
-
-      class DebouncedResourceModel extends Model.Service<DebouncedResourceModel>()(
-        "/test/resource/DebouncedResourceModel",
-      )({
-        make: () =>
-          Effect.gen(function* () {
-            const query = Store.make("a");
-            const user = yield* Resource.debounce(
-              Resource.make({
-                name: "debouncedUser",
-                stores: { query },
-                handler: ({ query }) =>
-                  Effect.sync(() => {
-                    calls.push(query);
-                    return `user:${query}`;
-                  }),
-              }),
-              "1 second",
-            );
-            const setQuery = Event.setter(query);
-
-            return {
-              inputs: { setQuery, reload: user.reload },
-              outputs: { user },
-              ui: { user },
-            };
-          }),
-      }) {}
-
-      yield* Effect.gen(function* () {
-        const model = yield* Model.get(DebouncedResourceModel);
-        yield* Registry.allSettled();
-        assert.deepStrictEqual(calls, ["a"]);
-
-        yield* Event.emit(model.inputs.setQuery, "b");
-        yield* Event.emit(model.inputs.setQuery, "c");
-        assert.deepStrictEqual(calls, ["a"]);
-
-        yield* TestClock.adjust("999 millis");
-        assert.deepStrictEqual(calls, ["a"]);
-
-        yield* TestClock.adjust("1 millis");
-        yield* Registry.allSettled();
-        assert.deepStrictEqual(calls, ["a", "c"]);
-      }).pipe(
-        Effect.provide(DebouncedResourceModel.layer.pipe(Layer.provideMerge(Registry.layer))),
+      let calls = 0;
+      const resource = yield* Resource.make(
+        Effect.sync(() => {
+          calls += 1;
+          return calls;
+        }),
       );
-    }));
 
-  it.effect("reloads when a derived dependency changes", () =>
+      assert.isTrue(AsyncResult.isInitial(resource.state.initial));
+      yield* Store.waitFor(resource.state, (result) => successValue(result) === 1);
+      assert.strictEqual(calls, 1);
+    }).pipe(Effect.provide(Registry.layer)),
+  );
+
+  it.effect("refresh keeps the previous value while waiting", () =>
     Effect.gen(function* () {
-      const calls: Array<number> = [];
+      const backend = gatedRequest<number>();
+      const resource = yield* Resource.make(backend.request);
 
-      class DerivedResourceModel extends Model.Service<DerivedResourceModel>()(
-        "/test/resource/DerivedResourceModel",
-      )({
-        make: () =>
-          Effect.gen(function* () {
-            const count = Store.make(0);
-            const even = Store.combine([count], (value) => (value % 2 === 0 ? value : undefined));
-            const doubled = yield* Resource.make({
-              stores: { even },
-              handler: ({ even }) =>
-                even === undefined
-                  ? Effect.fail("not open" as const)
-                  : Effect.sync(() => {
-                      calls.push(even);
-                      return even * 2;
-                    }),
-            });
-            const setCount = Event.setter(count);
+      yield* awaitCondition(() => backend.gates.length === 1);
+      yield* Deferred.succeed(backend.gateAt(0), 1);
+      yield* Store.waitFor(resource.state, (result) => successValue(result) === 1);
 
-            return {
-              inputs: { setCount },
-              outputs: { doubled, even },
-              ui: { doubled },
-            };
+      yield* Event.emit(resource.refresh);
+      yield* awaitCondition(() => backend.gates.length === 2);
+
+      const waiting = yield* Store.get(resource.state);
+      assert.isTrue(AsyncResult.isWaiting(waiting));
+      assert.strictEqual(successValue(waiting), 1);
+
+      yield* Deferred.succeed(backend.gateAt(1), 2);
+      yield* Store.waitFor(
+        resource.state,
+        (result) => successValue(result) === 2 && !result.waiting,
+      );
+    }).pipe(Effect.provide(Registry.layer)),
+  );
+
+  it.effect("a dependency change reloads with the fresh dependency value", () =>
+    Effect.gen(function* () {
+      const seen: Array<string> = [];
+      const dep = Store.make("a");
+      const resource = yield* Resource.make({
+        stores: { dep },
+        handler: ({ dep: value }) =>
+          Effect.sync(() => {
+            seen.push(value);
+            return value.toUpperCase();
           }),
-      }) {}
-
-      yield* Effect.gen(function* () {
-        const model = yield* Model.get(DerivedResourceModel);
-        yield* Registry.allSettled();
-        assert.deepStrictEqual(calls, [0]);
-
-        yield* Registry.allSettled(Event.emit(model.inputs.setCount, 1));
-        assert.deepStrictEqual(calls, [0]);
-        assert.strictEqual((yield* Store.get(model.outputs.doubled))._tag, "Failure");
-
-        yield* Registry.allSettled(Event.emit(model.inputs.setCount, 2));
-        assert.deepStrictEqual(calls, [0, 2]);
-        assert.deepStrictEqual(yield* Store.get(model.outputs.doubled), {
-          _tag: "Success",
-          value: 4,
-        });
-      }).pipe(Effect.provide(DerivedResourceModel.layer.pipe(Layer.provideMerge(Registry.layer))));
-    }));
-
-  it.effect("stores failures as AsyncResult data", () =>
-    Effect.gen(function* () {
-      const api = UserApi.of({
-        getUser: () => Effect.fail("boom"),
       });
 
-      yield* Effect.gen(function* () {
-        const model = yield* Model.get(UserResourceModel);
-        yield* Registry.allSettled();
+      yield* Store.waitFor(resource.state, (result) => successValue(result) === "A");
+      yield* Registry.allSettled(Store.set(dep, "b"));
+      assert.strictEqual(successValue(yield* Store.get(resource.state)), "B");
+      assert.deepStrictEqual(seen, ["a", "b"]);
+    }).pipe(Effect.provide(Registry.layer)),
+  );
 
-        const result = yield* Store.get(model.outputs.user);
-        assert.strictEqual(result._tag, "Failure");
-      }).pipe(Effect.provide(layer(api)));
-    }));
+  it.effect("a failed reload keeps the previous success", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const resource = yield* Resource.make(
+        Effect.suspend(() => {
+          calls += 1;
+          return calls === 1 ? Effect.succeed("one") : Effect.fail("boom");
+        }),
+      );
+
+      yield* Store.waitFor(resource.state, (result) => successValue(result) === "one");
+      yield* Registry.allSettled(Event.emit(resource.refresh));
+
+      const failed = yield* Store.get(resource.state);
+      assert.isTrue(AsyncResult.isFailure(failed));
+      assert.strictEqual(successValue(failed), "one");
+    }).pipe(Effect.provide(Registry.layer)),
+  );
+
+  it.effect("refetchOn reloads when any source emits", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const saved = Event.make();
+      const removed = Event.make();
+      const resource = yield* Resource.make(
+        Effect.sync(() => {
+          calls += 1;
+          return calls;
+        }),
+      ).pipe(Resource.refetchOn(saved, removed));
+
+      yield* Store.waitFor(resource.state, (result) => successValue(result) === 1);
+      yield* Registry.allSettled(Event.emit(saved));
+      assert.strictEqual(successValue(yield* Store.get(resource.state)), 2);
+      yield* Registry.allSettled(Event.emit(removed));
+      assert.strictEqual(successValue(yield* Store.get(resource.state)), 3);
+      assert.strictEqual(calls, 3);
+    }).pipe(Effect.provide(Registry.layer)),
+  );
+
+  it.effect("repeat reloads on every schedule step", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const resource = yield* Resource.make(
+        Effect.sync(() => {
+          calls += 1;
+          return calls;
+        }),
+      ).pipe(Resource.repeat(Schedule.spaced("30 seconds")));
+
+      yield* Store.waitFor(resource.state, (result) => successValue(result) === 1);
+
+      yield* TestClock.adjust("30 seconds");
+      yield* Store.waitFor(resource.state, (result) => successValue(result) === 2);
+
+      yield* TestClock.adjust("30 seconds");
+      yield* Store.waitFor(resource.state, (result) => successValue(result) === 3);
+      assert.strictEqual(calls, 3);
+    }).pipe(Effect.provide(Registry.layer)),
+  );
+
+  describe("paginated", () => {
+    interface Page {
+      readonly items: ReadonlyArray<number>;
+      readonly next: number | null;
+    }
+
+    const fetchPage = (start: number): Page => ({
+      items: [start, start + 1],
+      next: start + 2 <= 5 ? start + 2 : null,
+    });
+
+    const makePaginated = Resource.make({
+      stores: { pageSize: Store.make(2) },
+      handler: () => Effect.sync(() => fetchPage(1)),
+    }).pipe(
+      Resource.paginated({
+        hasMore: (_deps, current) => current.next !== null,
+        next: (_deps, current) => Effect.sync(() => fetchPage(current.next ?? 0)),
+        merge: (current, next) => ({
+          items: [...current.items, ...next.items],
+          next: next.next,
+        }),
+      }),
+    );
+
+    it.effect("loadMore merges pages and hasMore flips false when exhausted", () =>
+      Effect.gen(function* () {
+        const resource = yield* makePaginated;
+
+        yield* Store.waitFor(resource.state, (result) => successValue(result)?.items.length === 2);
+        assert.isTrue(yield* Store.get(resource.hasMore));
+
+        yield* Registry.allSettled(Event.emit(resource.loadMore));
+        assert.deepStrictEqual(successValue(yield* Store.get(resource.state))?.items, [1, 2, 3, 4]);
+        assert.isTrue(yield* Store.get(resource.hasMore));
+
+        yield* Registry.allSettled(Event.emit(resource.loadMore));
+        assert.strictEqual(successValue(yield* Store.get(resource.state))?.items.length, 6);
+        assert.isFalse(yield* Store.get(resource.hasMore));
+
+        yield* Registry.allSettled(Event.emit(resource.loadMore));
+        assert.strictEqual(successValue(yield* Store.get(resource.state))?.items.length, 6);
+      }).pipe(Effect.provide(Registry.layer)),
+    );
+
+    it.effect("refresh resets to page 1", () =>
+      Effect.gen(function* () {
+        const resource = yield* makePaginated;
+
+        yield* Store.waitFor(resource.state, (result) => successValue(result)?.items.length === 2);
+        yield* Registry.allSettled(Event.emit(resource.loadMore));
+        assert.strictEqual(successValue(yield* Store.get(resource.state))?.items.length, 4);
+
+        yield* Registry.allSettled(Event.emit(resource.refresh));
+        assert.deepStrictEqual(successValue(yield* Store.get(resource.state))?.items, [1, 2]);
+        assert.isTrue(yield* Store.get(resource.hasMore));
+      }).pipe(Effect.provide(Registry.layer)),
+    );
+
+    it.effect("loadMore during a load in flight is a no-op", () =>
+      Effect.gen(function* () {
+        const nextCalls: Array<number> = [];
+        const gates: Array<Deferred.Deferred<Page>> = [];
+        const resource = yield* Resource.make(Effect.succeed(fetchPage(1))).pipe(
+          Resource.paginated({
+            hasMore: (_deps, current) => current.next !== null,
+            next: (_deps, current) =>
+              Effect.suspend(() => {
+                nextCalls.push(current.next ?? 0);
+                const gate = Deferred.makeUnsafe<Page>();
+                gates.push(gate);
+                return Deferred.await(gate);
+              }),
+            merge: (current, next) => ({
+              items: [...current.items, ...next.items],
+              next: next.next,
+            }),
+          }),
+        );
+
+        yield* Store.waitFor(resource.state, (result) => successValue(result)?.items.length === 2);
+
+        yield* Event.emit(resource.loadMore);
+        yield* awaitCondition(() => nextCalls.length === 1);
+        yield* Event.emit(resource.loadMore);
+        yield* Effect.yieldNow;
+        assert.deepStrictEqual(nextCalls, [3]);
+
+        const gate = gates[0];
+        assert.isDefined(gate);
+        if (gate !== undefined) yield* Deferred.succeed(gate, fetchPage(3));
+        yield* Store.waitFor(
+          resource.state,
+          (result) => successValue(result)?.items.length === 4 && !result.waiting,
+        );
+        assert.deepStrictEqual(nextCalls, [3]);
+      }).pipe(Effect.provide(Registry.layer)),
+    );
+  });
 });

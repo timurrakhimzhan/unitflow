@@ -1,209 +1,229 @@
-import type * as Cause from "effect/Cause";
-import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import type * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Event from "./event.js";
 import { Registry } from "./registry.js";
 import * as Store from "./store.js";
 
-const ResourceTypeId = Symbol.for("@unitflow/core/Resource");
-const ResourceOptionsTypeId: unique symbol = Symbol.for("@unitflow/core/Resource/Options") as never;
+/**
+ * A remote read owned by a model: an `AsyncResult` store fed by one loader
+ * pipeline. It loads eagerly at construction, reloads on every `refresh`
+ * emit, and when declared with dependency stores, reloads whenever a
+ * dependency changes, handing the handler fresh dependency values each run.
+ */
+export interface Resource<
+  A,
+  E,
+  Deps extends Record<string, Store.Source<any>> = Record<never, never>,
+> {
+  /** The full store: the owning model may override it manually
+   * (`Store.set(resource.state, ...)`). */
+  readonly state: Store.Store<AsyncResult.AsyncResult<A, E>>;
+  /** Emitting reloads. Expose it directly as an input/ui port. */
+  readonly refresh: Event.Event<void>;
+  /** The declared dependency stores: combinators read fresh values here. */
+  readonly stores: Deps;
+}
 
-type StoreRecord = Readonly<Record<string, Store.Source<any>>>;
-
-type StoreValues<Stores extends StoreRecord> = {
-  readonly [K in keyof Stores]: Stores[K] extends Store.Source<infer A> ? A : never;
+export type DepValues<Deps> = {
+  readonly [K in keyof Deps]: Deps[K] extends Store.Source<infer A> ? A : never;
 };
 
-type MaybeEffect<A, E, R> = A | Effect.Effect<A, E, R>;
+/** A resource extended by {@link paginated}. */
+export interface Paginated<A, E, Deps extends Record<string, Store.Source<any>>>
+  extends Resource<A, E, Deps> {
+  /** Emitting appends the next page (no-op while loading or exhausted). */
+  readonly loadMore: Event.Event<void>;
+  readonly hasMore: Store.Combined<boolean>;
+}
 
-export type AsyncResult<A, E = unknown> =
-  | { readonly _tag: "Waiting" }
-  | { readonly _tag: "Success"; readonly value: A }
-  | { readonly _tag: "Failure"; readonly cause: Cause.Cause<E> };
-
-export namespace AsyncResult {
-  export const waiting = <A = never, E = never>(): AsyncResult<A, E> => ({
-    _tag: "Waiting",
-  });
-
-  export const success = <A, E = never>(value: A): AsyncResult<A, E> => ({
-    _tag: "Success",
-    value,
-  });
-
-  export const failure = <E, A = never>(cause: Cause.Cause<E>): AsyncResult<A, E> => ({
-    _tag: "Failure",
-    cause,
-  });
+export interface MakeOptions<Deps extends Record<string, Store.Source<any>>, A, E, R> {
+  readonly stores?: Deps;
+  readonly handler: (deps: DepValues<Deps>) => Effect.Effect<A, E, R>;
 }
 
 /**
- * A resource is a store-shaped descriptor so `View.make` binds it as the
- * current `AsyncResult`, while its `reload` command is available as an event
- * sink for inputs/ui commands.
+ * Runs one fetch into an `AsyncResult` store: marks it waiting (keeping the
+ * previous value on screen), then records success or failure (a failure keeps
+ * the previous success, so a flaky refetch never blanks loaded data). The
+ * returned effect never fails: failures are state.
  */
-export interface Resource<A, E = unknown> extends Store.Store<AsyncResult<A, E>> {
-  readonly reload: Event.Sink<void>;
-  readonly [ResourceTypeId]: typeof ResourceTypeId;
-}
-
-interface ResourcePipeOptions {
-  debounce?: Duration.Input;
-}
-
-export interface ResourceEffect<A, E, R> extends Effect.Effect<Resource<A, E>, never, R> {
-  readonly [ResourceOptionsTypeId]: ResourcePipeOptions;
-}
-
-export interface Options<Stores extends StoreRecord, A, E, R> {
-  readonly name?: string;
-  readonly stores?: Stores;
-  readonly handler: (values: StoreValues<Stores>) => MaybeEffect<A, E, R>;
-}
-
-const runMaybe = <A, E, R>(
-  evaluate: () => MaybeEffect<A, E, R>,
-): Effect.Effect<A, E, R> =>
-  Effect.suspend(() => {
-    const value = evaluate();
-    return Effect.isEffect(value) ? value : Effect.succeed(value);
+const load = <A, E, R>(
+  store: Store.Store<AsyncResult.AsyncResult<A, E>>,
+  request: Effect.Effect<A, E, R>,
+): Effect.Effect<void, never, R | Registry> =>
+  Effect.gen(function* () {
+    // Start the request before publishing waiting so an observer woken by the
+    // waiting emission finds the request already in flight.
+    const fiber = yield* Effect.forkChild(request, { startImmediately: true });
+    yield* Store.update(store, (current) => AsyncResult.waiting(current));
+    yield* Fiber.join(fiber).pipe(
+      Effect.matchCauseEffect({
+        onSuccess: (value) => Store.set(store, AsyncResult.success(value)),
+        onFailure: (cause) =>
+          Store.update(store, (current) =>
+            AsyncResult.failureWithPrevious(cause, { previous: Option.some(current) }),
+          ),
+      }),
+    );
   });
 
-const readValues = <Stores extends StoreRecord>(
-  entries: ReadonlyArray<readonly [string, Store.Source<any>]>,
-): Effect.Effect<StoreValues<Stores>, never, Registry> =>
-  Effect.map(
-    Effect.forEach(entries, ([key, store]) =>
-      Effect.map(Store.get(store), (value) => [key, value] as const),
-    ),
-    (values) => Object.fromEntries(values) as StoreValues<Stores>,
-  );
+/** Reads the current value of every dependency store, keyed as declared. */
+const depValues = <Deps extends Record<string, Store.Source<any>>>(
+  stores: Deps,
+): Effect.Effect<DepValues<Deps>, never, Registry> =>
+  Effect.gen(function* () {
+    const out: Record<string, unknown> = {};
+    for (const [key, source] of Object.entries(stores)) {
+      out[key] = yield* Store.get(source);
+    }
+    return out as DepValues<Deps>;
+  });
 
-const valuesEqual = <Stores extends StoreRecord>(
-  left: StoreValues<Stores>,
-  right: StoreValues<Stores>,
-): boolean => {
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  return (
-    leftKeys.length === rightKeys.length &&
-    leftKeys.every((key) => Object.is(left[key], right[key]))
-  );
+/** Re-associates positional combine values with their dependency keys. */
+const associate = <Deps>(
+  keys: ReadonlyArray<string>,
+  values: ReadonlyArray<unknown>,
+): DepValues<Deps> => {
+  const out: Record<string, unknown> = {};
+  keys.forEach((key, index) => {
+    out[key] = values[index];
+  });
+  return out as DepValues<Deps>;
 };
 
-const watchSources = (source: Store.Source<any>): ReadonlyArray<Store.Source<any>> =>
-  Store.isCombined(source) ? Store.sourcesOf(source).flatMap(watchSources) : [source];
+export function make<A, E, R>(
+  request: Effect.Effect<A, E, R>,
+): Effect.Effect<Resource<A, E>, never, R | Registry>;
+export function make<Deps extends Record<string, Store.Source<any>>, A, E, R>(
+  options: MakeOptions<Deps, A, E, R>,
+): Effect.Effect<Resource<A, E, Deps>, never, R | Registry>;
+export function make<Deps extends Record<string, Store.Source<any>>, A, E, R>(
+  requestOrOptions: Effect.Effect<A, E, R> | MakeOptions<Deps, A, E, R>,
+): Effect.Effect<Resource<A, E, Deps>, never, R | Registry> {
+  const stores = (Effect.isEffect(requestOrOptions) ? {} : (requestOrOptions.stores ?? {})) as Deps;
+  const handler: (deps: DepValues<Deps>) => Effect.Effect<A, E, R> = Effect.isEffect(
+    requestOrOptions,
+  )
+    ? () => requestOrOptions
+    : requestOrOptions.handler;
 
-const uniqueSources = (
-  sources: ReadonlyArray<Store.Source<any>>,
-): ReadonlyArray<Store.Source<any>> => [...new Map(sources.map((source) => [source.id, source])).values()];
+  return Effect.gen(function* () {
+    const state = Store.make<AsyncResult.AsyncResult<A, E>>(AsyncResult.initial(true));
 
-export const make = <
-  const Stores extends StoreRecord = Record<never, never>,
-  A = never,
-  E = never,
-  R = never,
->(
-  options: Options<Stores, A, E, R>,
-): ResourceEffect<A, E, R | Registry> => {
-  const pipeOptions: ResourcePipeOptions = {};
-  const effect = Effect.gen(function* () {
-    const state = Store.make<AsyncResult<A, E>>(
-      AsyncResult.waiting(),
-      options.name === undefined ? undefined : { name: options.name },
-    );
-    const entries = Object.entries(options.stores ?? {}) as ReadonlyArray<
-      readonly [string, Store.Source<any>]
-    >;
+    // The handler always receives fresh dependency values, read right before
+    // each run.
+    const run = Effect.flatMap(depValues(stores), (deps) => load(state, handler(deps)));
 
-    let generation = 0;
-    let lastValues = yield* readValues<Stores>(entries);
-
-    const run = (values: StoreValues<Stores>): Effect.Effect<void, never, R | Registry> =>
-      Effect.gen(function* () {
-        const current = ++generation;
-        yield* Store.set(state, AsyncResult.waiting());
-        const exit = yield* Effect.exit(runMaybe(() => options.handler(values)));
-        if (current !== generation) return;
-        if (Exit.isSuccess(exit)) {
-          yield* Store.set(state, AsyncResult.success(exit.value));
-          return;
-        }
-        yield* Store.set(state, AsyncResult.failure(exit.cause));
-      });
-
-    const runCurrent: Effect.Effect<void, never, R | Registry> = Effect.flatMap(
-      readValues<Stores>(entries),
-      (values) =>
-        Effect.flatMap(
-          Effect.sync(() => {
-            lastValues = values;
-          }),
-          () => run(values),
+    const refresh = yield* Event.make().pipe(Event.handler(() => run));
+    for (const source of Object.values(stores)) {
+      yield* Registry.run(
+        Store.stream(source).pipe(
+          Stream.drop(1),
+          Stream.mapEffect(() => run),
         ),
-    );
-
-    const reload = yield* Event.make<void>(
-      options.name === undefined ? undefined : { name: `${options.name}.reload` },
-    ).pipe(Event.handler(() => runCurrent));
-
-    if (entries.length > 0) {
-      const sources = uniqueSources(entries.flatMap(([, store]) => watchSources(store)));
-      yield* Effect.forEach(
-        sources,
-        (store) => {
-          const changes =
-            pipeOptions.debounce === undefined
-              ? Store.stream(store)
-              : Store.stream(store).pipe(Stream.debounce(pipeOptions.debounce));
-          return Registry.run(
-            changes.pipe(
-              Stream.mapEffect(() =>
-                Effect.flatMap(readValues<Stores>(entries), (values) => {
-                  if (valuesEqual(values, lastValues)) return Effect.void;
-                  lastValues = values;
-                  return run(values);
-                }),
-              ),
-            ),
-          );
-        },
-        { discard: true },
       );
     }
 
-    yield* Event.emit(reload);
+    // The initial load goes through the refresh channel so `Registry.allSettled`
+    // covers construction-time loads.
+    yield* Event.emit(refresh);
 
-    return Object.assign(state, {
-      reload,
-      [ResourceTypeId]: ResourceTypeId,
-    }) as Resource<A, E>;
+    return { state, refresh, stores };
   });
-  return Object.assign(effect, { [ResourceOptionsTypeId]: pipeOptions });
-};
-
-export const isResource = (value: unknown): value is Resource<unknown, unknown> =>
-  typeof value === "object" && value !== null && ResourceTypeId in value;
-
-export function debounce(
-  duration: Duration.Input,
-): <A, E, R>(resource: ResourceEffect<A, E, R>) => ResourceEffect<A, E, R>;
-export function debounce<A, E, R>(
-  resource: ResourceEffect<A, E, R>,
-  duration: Duration.Input,
-): ResourceEffect<A, E, R>;
-export function debounce<A, E, R>(
-  resourceOrDuration: ResourceEffect<A, E, R> | Duration.Input,
-  duration?: Duration.Input,
-):
-  | ResourceEffect<A, E, R>
-  | (<A2, E2, R2>(resource: ResourceEffect<A2, E2, R2>) => ResourceEffect<A2, E2, R2>) {
-  if (duration === undefined) {
-    return (resource) => debounce(resource, resourceOrDuration as Duration.Input);
-  }
-  const resource = resourceOrDuration as ResourceEffect<A, E, R>;
-  resource[ResourceOptionsTypeId].debounce = duration;
-  return resource;
 }
+
+/** Forks one pipeline per source that reloads the resource whenever that
+ * source emits. */
+export const refetchOn =
+  (...sources: ReadonlyArray<Event.Source<any>>) =>
+  <R extends Resource<any, any, any>, E, Req>(
+    self: Effect.Effect<R, E, Req>,
+  ): Effect.Effect<R, E, Req | Registry> =>
+    Effect.tap(self, (resource) =>
+      Effect.forEach(
+        sources,
+        (source) =>
+          Registry.run(
+            Event.stream(source).pipe(Stream.mapEffect(() => Event.emit(resource.refresh))),
+          ),
+        { discard: true },
+      ),
+    );
+
+/** Forks a pipeline that reloads the resource on every schedule step. */
+export const repeat =
+  <Out, SR>(schedule: Schedule.Schedule<Out, unknown, never, SR>) =>
+  <R extends Resource<any, any, any>, E, Req>(
+    self: Effect.Effect<R, E, Req>,
+  ): Effect.Effect<R, E, Req | SR | Registry> =>
+    Effect.tap(self, (resource) =>
+      Registry.run(
+        Stream.fromSchedule(schedule).pipe(Stream.mapEffect(() => Event.emit(resource.refresh))),
+      ),
+    );
+
+/**
+ * Extends a resource with cursorless pagination: `loadMore` fetches the next
+ * page via `next` and merges it into the current value; `hasMore` reports
+ * whether another page exists. `refresh` (and any dependency change) drives
+ * the base loader, which replaces the state with a fresh first page.
+ */
+export const paginated =
+  <Deps extends Record<string, Store.Source<any>>, A, E, R2>(options: {
+    readonly hasMore: (deps: DepValues<Deps>, current: A) => boolean;
+    readonly next: (deps: DepValues<Deps>, current: A) => Effect.Effect<A, E, R2>;
+    readonly merge: (current: A, next: A) => A;
+  }) =>
+  <Req>(
+    self: Effect.Effect<Resource<A, E, Deps>, never, Req>,
+  ): Effect.Effect<Paginated<A, E, Deps>, never, Req | R2 | Registry> =>
+    Effect.flatMap(self, (resource) =>
+      Effect.gen(function* () {
+        const depKeys = Object.keys(resource.stores);
+        const depSources: ReadonlyArray<Store.Source<any>> = Object.values(resource.stores);
+        const hasMore = Store.combine([resource.state, ...depSources], (current, ...values) =>
+          Option.match(AsyncResult.value(current), {
+            onNone: () => false,
+            onSome: (value) => options.hasMore(associate<Deps>(depKeys, values), value),
+          }),
+        );
+
+        const loadMore = yield* Event.make().pipe(
+          Event.handler(() =>
+            Effect.gen(function* () {
+              const current = yield* Store.get(resource.state);
+              if (current.waiting) return;
+              const value = AsyncResult.value(current);
+              if (Option.isNone(value)) return;
+              const deps = yield* depValues(resource.stores);
+              if (!options.hasMore(deps, value.value)) return;
+              yield* Store.update(resource.state, (state) => AsyncResult.waiting(state));
+              yield* Effect.forkChild(
+                options.next(deps, value.value).pipe(
+                  Effect.matchCauseEffect({
+                    onSuccess: (next) =>
+                      Store.set(
+                        resource.state,
+                        AsyncResult.success(options.merge(value.value, next)),
+                      ),
+                    onFailure: (cause) =>
+                      Store.update(resource.state, (state) =>
+                        AsyncResult.failureWithPrevious(cause, {
+                          previous: Option.some(state),
+                        }),
+                      ),
+                  }),
+                ),
+                { startImmediately: true },
+              );
+            }),
+          ),
+        );
+
+        return { ...resource, loadMore, hasMore };
+      }),
+    );
