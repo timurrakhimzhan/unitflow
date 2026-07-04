@@ -1071,14 +1071,36 @@ describe("Unitflow", () => {
     }).pipe(Effect.provide(Registry.layer)),
   );
 
-  it("Event.handler is owner-only and error-free (type-level)", () => {
+  it.effect("Event.handler can attach to a source-only combined event", () =>
+    Effect.gen(function* () {
+      const savedEvent = Event.make<number>();
+      const failedEvent = Event.make<number>();
+      const settledEvent = Event.combine([savedEvent, failedEvent]);
+      const seen: Array<number> = [];
+
+      const returned = yield* settledEvent.pipe(
+        Event.handler((value) =>
+          Effect.sync(() => {
+            seen.push(value);
+          }),
+        ),
+      );
+
+      assert.strictEqual(returned, settledEvent);
+
+      yield* Registry.allSettled(Event.emit(savedEvent, 1), Event.emit(failedEvent, 2));
+
+      assert.deepStrictEqual(seen, [1, 2]);
+    }).pipe(Effect.provide(Registry.layer)),
+  );
+
+  it("Event.handler is source-only and error-free (type-level)", () => {
     const check = (ports: Model.PortsOf<typeof CounterModel>) => {
       const sinkHandler = Event.handler((_value: number) => Effect.void)(
-        // @ts-expect-error Event.handler takes the full Event — a Sink port is not accepted
+        // @ts-expect-error Event.handler takes a Source — a Sink port is not accepted
         ports.inputs.incrementEvent,
       );
       const combinedEvent = Event.combine([Event.make<number>()]);
-      // @ts-expect-error Event.handler takes the full Event — a combined Source is not accepted
       const sourceHandler = Event.handler((_value: number) => Effect.void)(combinedEvent);
       // @ts-expect-error handlers must keep the error channel empty — handle failures inside
       const failingHandler = Event.make<number>().pipe(Event.handler(() => Effect.fail("boom")));

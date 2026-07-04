@@ -17,6 +17,7 @@ import {
   trackPublish,
   trackSubscription,
 } from "./registry.js";
+import * as Event from "./event.js";
 import { awaitFirst, evaluate, type WaitPredicate } from "./wait-for.js";
 
 const TypeId = Symbol.for("@unitflow/core/Store");
@@ -340,6 +341,50 @@ export const stream = <A>(store: Source<A>): Stream.Stream<A, never, Registry> =
     }),
   );
 };
+
+const watchSources = (source: Source<any>): ReadonlyArray<Source<any>> =>
+  isCombined(source) ? sourcesOf(source).flatMap(watchSources) : [source];
+
+const uniqueSources = (
+  sources: ReadonlyArray<Source<any>>,
+): ReadonlyArray<Source<any>> => [...new Map(sources.map((source) => [source.id, source])).values()];
+
+/** Creates an event that emits the store's value on every subsequent store
+ * emission. The current replayed value is skipped, so construction does not
+ * count as a change. */
+export const changed = <A>(
+  store: Source<A>,
+  options?: Pick<Event.Options, "name">,
+): Effect.Effect<Event.Event<A>, never, Registry> =>
+  Effect.gen(function* () {
+    const changedEvent = Event.make<A>(
+      options?.name !== undefined
+        ? { name: options.name }
+        : store.name === undefined
+          ? undefined
+          : { name: `${store.name}.changed` },
+    );
+    let current = yield* get(store);
+    const emitIfChanged = Effect.flatMap(get(store), (value) =>
+      Effect.suspend(() => {
+        if (Object.is(value, current)) return Effect.void;
+        current = value;
+        return Event.emit(changedEvent, value);
+      }),
+    );
+    yield* Effect.forEach(
+      uniqueSources(watchSources(store)),
+      (source) =>
+        Registry.run(
+          stream(source).pipe(
+            Stream.drop(1),
+            Stream.mapEffect(() => emitIfChanged),
+          ),
+        ),
+      { discard: true },
+    );
+    return changedEvent;
+  });
 
 /** `waitFor` options without a timeout: the wait can only end with a match
  * (or the interruption/failure paths documented on {@link waitFor}). */

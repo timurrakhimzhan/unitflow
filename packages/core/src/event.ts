@@ -305,18 +305,18 @@ export function waitFor(
 }
 
 /**
- * Pipe-combinator for "on event, do effect": forks a sequential pipeline that
- * runs `handle` for every emit, in the owner scope via `Registry.run` — same
- * error-free gate (`E = never`), same defect logging, same `allSettled`
- * accounting as a hand-written pipeline. Returns the descriptor itself, so it
- * composes at the declaration site:
+ * Pipe-combinator for "on event source, do effect": forks a sequential
+ * pipeline that runs `handle` for every emit, in the owner scope via
+ * `Registry.run` — same error-free gate (`E = never`), same defect logging,
+ * same `allSettled` accounting as a hand-written pipeline. Returns the
+ * descriptor itself, so it composes at the declaration site:
  *
  * ```ts
  * const open = yield* Event.make<string>().pipe(Event.handler((url) => ...));
  * ```
  *
- * Owner-only: it takes the full `Event`, never a `Source`/`Sink` port. Apply
- * it more than once for multiple independent handlers.
+ * Owner-only: it takes an `Event.Source`, never a sink-only port. Apply it
+ * more than once for multiple independent handlers.
  *
  * `{ concurrency: "unbounded" }` forks each emission's handling into the
  * owner's scope instead of processing sequentially. This is the ONLY
@@ -329,34 +329,51 @@ export function waitFor(
  * and only the handling forks.
  */
 export const handler =
-  <A, R>(
+  <A = any, R = never>(
     handle: (value: A) => Effect.Effect<unknown, never, R>,
     options?: { readonly concurrency?: "unbounded" },
-  ) =>
-  (event: Event<A>): Effect.Effect<Event<A>, never, R | Registry> =>
-    options?.concurrency === "unbounded"
-      ? Effect.gen(function* () {
-          const scope = yield* ownerScope;
-          yield* Registry.run(
-            stream(event).pipe(
-              Stream.mapEffect((value) =>
-                Effect.forkIn(
-                  handle(value).pipe(
-                    Effect.onExit((exit) =>
-                      Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
-                        ? Effect.logError(
-                            "Unitflow concurrent handler terminated unexpectedly",
-                            exit.cause,
-                          )
-                        : Effect.void,
+  ): {
+    <E extends Source<A>>(event: E): Effect.Effect<E, never, R | Registry>;
+    <E extends Event<A>>(event: E): Effect.Effect<E, never, R | Registry>;
+  } => {
+    const attachSource = (source: Source<A>): Effect.Effect<void, never, R | Registry> => {
+      if (isCombined(source)) {
+        return Effect.forEach(
+          sourcesOf(source),
+          (inner) => attachSource(inner as Source<A>),
+          { discard: true },
+        );
+      }
+      return options?.concurrency === "unbounded"
+        ? Effect.gen(function* () {
+            const scope = yield* ownerScope;
+            yield* Registry.run(
+              stream(source).pipe(
+                Stream.mapEffect((value) =>
+                  Effect.forkIn(
+                    handle(value).pipe(
+                      Effect.onExit((exit) =>
+                        Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause)
+                          ? Effect.logError(
+                              "Unitflow concurrent handler terminated unexpectedly",
+                              exit.cause,
+                            )
+                          : Effect.void,
+                      ),
                     ),
+                    scope,
+                    { startImmediately: true },
                   ),
-                  scope,
-                  { startImmediately: true },
                 ),
               ),
-            ),
-          );
-          return event;
-        })
-      : Registry.run(stream(event).pipe(Stream.mapEffect(handle))).pipe(Effect.as(event));
+            );
+          })
+        : Registry.run(stream(source).pipe(Stream.mapEffect(handle)));
+    };
+    const attach = (event: Source<A>): Effect.Effect<Source<A>, never, R | Registry> =>
+      Effect.as(attachSource(event), event);
+    return attach as {
+      <E extends Source<A>>(event: E): Effect.Effect<E, never, R | Registry>;
+      <E extends Event<A>>(event: E): Effect.Effect<E, never, R | Registry>;
+    };
+  };
