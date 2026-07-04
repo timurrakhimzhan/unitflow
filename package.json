@@ -9,10 +9,11 @@
     "build": "astro build",
     "packages:build": "pnpm --filter @unitflow/core --filter @unitflow/react build",
     "packages:test": "pnpm --filter @unitflow/core --filter @unitflow/react test",
+    "examples:build": "pnpm --filter '@unitflow/example-*' build",
     "astro:check": "astro check",
     "docs:check": "node scripts/check-docs.mjs && pnpm astro:check && pnpm build",
     "skill:validate": "python3 ${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py skills/unitflow-modeling",
-    "check": "pnpm packages:build && pnpm packages:test && pnpm docs:check && pnpm skill:validate"
+    "check": "pnpm packages:build && pnpm packages:test && pnpm examples:build && pnpm docs:check && pnpm skill:validate"
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.3",

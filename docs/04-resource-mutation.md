@@ -1,6 +1,7 @@
 # Resource and Mutation
 
-`Resource` and `Mutation` are recipes over `Store`, `Event`, and `Effect`.
+`Resource` is the core primitive for async reads. `Mutation` is the matching
+recipe for observable writes.
 
 ## Resource
 
@@ -14,11 +15,17 @@ const projects = yield* Resource.make({
 const filtered = yield* Resource.make({
   stores: { query },
   handler: ({ query }) => client.searchProjects({ query }),
-});
+}).pipe(Resource.debounce("250 millis"));
+
+const reloadProjects = projects.reload;
 ```
 
-The resource state is an `AsyncResult`: render `_tag`/`waiting`, not nullable
-data plus separate booleans.
+The resource is store-shaped, so returning it in `ui` or `outputs` exposes the
+current `AsyncResult`. Render `_tag` (`Waiting`, `Success`, `Failure`), not
+nullable data plus separate booleans.
+
+`Resource.debounce` debounces reloads caused by dependency store changes. The
+initial load and explicit `resource.reload` event stay immediate.
 
 ## Mutation
 

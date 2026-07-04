@@ -3,13 +3,14 @@ import { dirname, join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const markdownFiles = [];
+const ignoredDirectories = new Set([".astro", ".git", "dist", "node_modules", "repos"]);
 
 const walk = (dir) => {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
     const stat = statSync(path);
     if (stat.isDirectory()) {
-      if (entry === "node_modules" || entry === ".git") continue;
+      if (ignoredDirectories.has(entry)) continue;
       walk(path);
       continue;
     }

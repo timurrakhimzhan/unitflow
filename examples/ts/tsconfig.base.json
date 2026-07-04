@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "@unitflow/core": [
+        "../../packages/core/src/index.ts"
+      ],
+      "@unitflow/core/*": [
+        "../../packages/core/src/*.ts"
+      ],
+      "@unitflow/react": [
+        "../../packages/react/src/index.ts"
+      ],
+      "@unitflow/react/*": [
+        "../../packages/react/src/*.ts",
+        "../../packages/react/src/*.tsx"
+      ]
+    }
+  }
+}

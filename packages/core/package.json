@@ -23,6 +23,10 @@
       "types": "./dist/registry.d.ts",
       "default": "./dist/registry.js"
     },
+    "./resource": {
+      "types": "./dist/resource.d.ts",
+      "default": "./dist/resource.js"
+    },
     "./runtime": {
       "types": "./dist/runtime.d.ts",
       "default": "./dist/runtime.js"

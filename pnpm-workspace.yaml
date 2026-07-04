@@ -1,5 +1,6 @@
 packages:
   - "packages/*"
+  - "examples/ts/*"
 allowBuilds:
   esbuild: true
   msgpackr-extract: true
