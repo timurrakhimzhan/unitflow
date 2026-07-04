@@ -1,0 +1,25 @@
+{
+  "name": "unitflow-docs-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "dev": "astro dev --host 127.0.0.1 --port 4177",
+    "docs:dev": "pnpm dev",
+    "build": "astro build",
+    "packages:build": "pnpm --filter @unitflow/core --filter @unitflow/react build",
+    "packages:test": "pnpm --filter @unitflow/core --filter @unitflow/react test",
+    "astro:check": "astro check",
+    "docs:check": "node scripts/check-docs.mjs && pnpm astro:check && pnpm build",
+    "skill:validate": "python3 ${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py skills/unitflow-modeling",
+    "check": "pnpm packages:build && pnpm packages:test && pnpm docs:check && pnpm skill:validate"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.41.3",
+    "astro": "7.0.6"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.9",
+    "typescript": "6.0.3"
+  }
+}

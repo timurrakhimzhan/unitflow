@@ -1,0 +1,35 @@
+{
+  "name": "@unitflow/react",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "React bindings for Unitflow.",
+  "license": "MIT",
+  "sideEffects": false,
+  "files": ["dist"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@unitflow/core": "workspace:^"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.88",
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0-beta.88",
+    "@types/react": "*",
+    "effect": "4.0.0-beta.88",
+    "react": "*",
+    "vitest": "3.2.4"
+  }
+}

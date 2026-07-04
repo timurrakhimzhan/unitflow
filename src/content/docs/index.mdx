@@ -1,0 +1,334 @@
+---
+title: Unitflow
+description: Effect-native UI state management with scoped models, typed ports, and deterministic tests.
+template: splash
+hero:
+  tagline: Effect-first UI state management.
+  image:
+    html: |
+      <div class="unitflow-hero-code" data-unitflow-hero-tabs aria-label="Project setup Unitflow example">
+        <div class="unitflow-code-tabs" role="tablist" aria-label="Example files">
+          <button class="unitflow-code-tab unitflow-code-tab-active" type="button" data-unitflow-tab="child" role="tab" aria-selected="true">child.ts</button>
+          <button class="unitflow-code-tab" type="button" data-unitflow-tab="parent" role="tab" aria-selected="false">parent.ts</button>
+          <button class="unitflow-code-tab" type="button" data-unitflow-tab="ui" role="tab" aria-selected="false">UI.tsx</button>
+        </div>
+        <pre class="unitflow-code-panel unitflow-code-panel-active" data-unitflow-panel="child"><code><span class="uf-keyword">export class</span> ProjectNameModel <span class="uf-keyword">extends</span> Model.Service(... )({
+        make: Effect.gen(function* () {
+          <span class="uf-muted">const</span> name = Store.make("");
+          <span class="uf-muted">const</span> canSubmit = name.pipe(Store.map(isProjectNameReady));
+          <span class="uf-muted">const</span> view = Store.combine([name, canSubmit], makeView);
+          <span class="uf-muted">const</span> setName = Event.setter(name);
+          <span class="uf-muted">const</span> submitted = <span class="uf-keyword">yield*</span> Event.make&lt;ProjectDraft&gt;();
+      
+          <span class="uf-muted">const</span> submit = <span class="uf-keyword">yield*</span> Event.make&lt;void&gt;().pipe(
+            Event.handler(() =&gt; Effect.gen(function* () {
+              <span class="uf-muted">const</span> current = normalize(<span class="uf-keyword">yield*</span> Store.get(name));
+              <span class="uf-keyword">if</span> (!isProjectNameReady(current)) <span class="uf-keyword">return</span>;
+              <span class="uf-keyword">yield*</span> Event.emit(submitted, { name: current });
+            })),
+          );
+      
+          <span class="uf-keyword">return</span> { outputs: { submitted }, ui: { view, setName, submit } };
+        }),
+      }) {}</code></pre>
+        <pre class="unitflow-code-panel" data-unitflow-panel="parent" hidden><code><span class="uf-keyword">export class</span> ProjectSetupModel <span class="uf-keyword">extends</span> Model.Service(... )({
+        make: Effect.gen(function* () {
+          <span class="uf-muted">const</span> nameStep = <span class="uf-keyword">yield*</span> Model.get(ProjectNameModel);
+          <span class="uf-muted">const</span> template = Store.make&lt;Template&gt;("ifc");
+          <span class="uf-muted">const</span> view = template.pipe(Store.map((template) =&gt; ({ template })));
+          <span class="uf-muted">const</span> setTemplate = Event.setter(template);
+          <span class="uf-muted">const</span> created = <span class="uf-keyword">yield*</span> Event.make&lt;ProjectCreated&gt;();
+      
+          <span class="uf-keyword">yield*</span> Registry.run(
+            Event.stream(nameStep.outputs.submitted).pipe(
+              Stream.mapEffect(({ name }) =&gt; Effect.gen(function* () {
+                <span class="uf-muted">const</span> currentTemplate = <span class="uf-keyword">yield*</span> Store.get(template);
+                <span class="uf-keyword">yield*</span> Event.emit(created, { name, template: currentTemplate });
+              })),
+            ),
+          );
+      
+          <span class="uf-keyword">return</span> { outputs: { created }, ui: { view, setTemplate, nameStep } };
+        }),
+      }) {}</code></pre>
+        <pre class="unitflow-code-panel" data-unitflow-panel="ui" hidden><code><span class="uf-keyword">export const</span> ProjectSetupView = View.make(
+        ProjectSetupModel,
+        ({ view, setTemplate, nameStep }) =&gt; (
+          &lt;section&gt;
+            &lt;ProjectNameStep unit={nameStep} /&gt;
+            &lt;TemplateTabs
+              value={view.template}
+              onChange={setTemplate}
+            /&gt;
+          &lt;/section&gt;
+        ),
+      );</code></pre>
+      </div>
+      <script>
+        (() => {
+          const root = document.querySelector("[data-unitflow-hero-tabs]");
+          if (!root || root.dataset.unitflowBound === "true") return;
+          root.dataset.unitflowBound = "true";
+          root.addEventListener("click", (event) => {
+            const tab = event.target.closest("[data-unitflow-tab]");
+            if (!tab || !root.contains(tab)) return;
+            const selected = tab.dataset.unitflowTab;
+            root.querySelectorAll("[data-unitflow-tab]").forEach((button) => {
+              const active = button.dataset.unitflowTab === selected;
+              button.classList.toggle("unitflow-code-tab-active", active);
+              button.setAttribute("aria-selected", active ? "true" : "false");
+            });
+            root.querySelectorAll("[data-unitflow-panel]").forEach((panel) => {
+              const active = panel.dataset.unitflowPanel === selected;
+              panel.toggleAttribute("hidden", !active);
+              panel.classList.toggle("unitflow-code-panel-active", active);
+            });
+          });
+        })();
+      </script>
+  actions:
+    - text: Why Unitflow
+      link: /overview/
+      icon: right-arrow
+    - text: Start with Store
+      link: /store/
+      variant: secondary
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Unitflow is an Effect-first state manager for UI applications. It keeps Effect's
+dependency injection, streams, fibers, scopes, and typed errors in the place
+where UI logic usually becomes callbacks and hook glue.
+
+The core idea: describe behavior in small models, expose typed inputs and
+outputs, then let React bind the `ui` surface without owning the logic.
+
+## One Flow, Two Models
+
+A project setup flow has two kinds of complexity: one step owns focused form
+logic, while the parent owns orchestration. Unitflow keeps those boundaries
+visible.
+
+`ProjectNameModel` validates and emits a submitted draft. `ProjectSetupModel`
+gets that child model through Effect DI, listens to the child's output as a
+stream, combines it with its own template store, and emits a final event.
+
+<Tabs>
+  <TabItem label="ProjectNameModel">
+
+```ts
+import { Effect } from "effect";
+import { Event, Model, Store } from "@unitflow/core";
+
+interface ProjectDraft {
+  readonly name: string;
+}
+
+const normalize = (name: string) => name.trim();
+const isProjectNameReady = (name: string) => normalize(name).length >= 3;
+
+export class ProjectNameModel extends Model.Service<ProjectNameModel>()(
+  "examples/project-name",
+)({
+  make: Effect.gen(function* () {
+    const name = Store.make("");
+    const canSubmit = name.pipe(Store.map(isProjectNameReady));
+
+    const view = Store.combine([name, canSubmit], (name, canSubmit) => ({
+      name,
+      canSubmit,
+    }));
+
+    const setName = Event.setter(name);
+    const submitted = yield* Event.make<ProjectDraft>();
+
+    const submit = yield* Event.make<void>().pipe(
+      Event.handler(() =>
+        Effect.gen(function* () {
+          const current = normalize(yield* Store.get(name));
+          if (!isProjectNameReady(current)) return;
+
+          yield* Event.emit(submitted, { name: current });
+        }),
+      ),
+    );
+
+    return {
+      inputs: { setName, submit },
+      outputs: { submitted },
+      ui: { view, setName, submit },
+    };
+  }),
+}) {}
+```
+
+  </TabItem>
+  <TabItem label="ProjectSetupModel">
+
+```ts
+import { Effect, Stream } from "effect";
+import { Event, Model, Registry, Store } from "@unitflow/core";
+import { ProjectNameModel } from "./project-name-model";
+
+export type Template = "blank" | "ifc" | "floorPlan";
+
+interface ProjectCreated {
+  readonly name: string;
+  readonly template: Template;
+}
+
+export class ProjectSetupModel extends Model.Service<ProjectSetupModel>()(
+  "examples/project-setup",
+)({
+  make: Effect.gen(function* () {
+    const nameStep = yield* Model.get(ProjectNameModel);
+
+    const template = Store.make<Template>("ifc");
+    const status = Store.make<"editing" | "ready">("editing");
+    const created = yield* Event.make<ProjectCreated>();
+
+    const view = Store.combine([template, status], (template, status) => ({
+      template,
+      status,
+    }));
+
+    const setTemplate = Event.setter(template);
+
+    yield* Registry.run(
+      Event.stream(nameStep.outputs.submitted).pipe(
+        Stream.mapEffect(({ name }) =>
+          Effect.gen(function* () {
+            const currentTemplate = yield* Store.get(template);
+
+            yield* Store.set(status, "ready");
+            yield* Event.emit(created, {
+              name,
+              template: currentTemplate,
+            });
+          }),
+        ),
+      ),
+    );
+
+    return {
+      inputs: { setTemplate },
+      outputs: { created },
+      ui: { view, setTemplate, nameStep },
+    };
+  }),
+}) {}
+```
+
+  </TabItem>
+  <TabItem label="UI.tsx">
+
+```tsx
+import { View } from "@unitflow/react";
+import { ProjectNameModel } from "./project-name-model";
+import { ProjectSetupModel, type Template } from "./project-setup-model";
+
+export const ProjectNameStep = View.make(
+  ProjectNameModel,
+  ({ view, setName, submit }) => (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+    >
+      <input
+        value={view.name}
+        onChange={(event) => setName(event.currentTarget.value)}
+        placeholder="Project name"
+      />
+
+      <button disabled={!view.canSubmit}>Continue</button>
+    </form>
+  ),
+);
+
+export const ProjectSetupView = View.make(
+  ProjectSetupModel,
+  ({ view, setTemplate, nameStep }) => (
+    <section>
+      <ProjectNameStep unit={nameStep} />
+
+      <TemplateTabs
+        value={view.template}
+        onChange={(template: Template) => setTemplate(template)}
+      />
+
+      {view.status === "ready" ? <ReadyBanner /> : null}
+    </section>
+  ),
+);
+```
+
+  </TabItem>
+  <TabItem label="model.test.ts">
+
+```ts
+import { assert, it } from "@effect/vitest";
+import { Effect, Fiber } from "effect";
+import { Event, Model, Registry } from "@unitflow/core";
+import { ProjectSetupModel } from "./project-setup-model";
+
+it.effect("creates a project when the child step submits", () =>
+  Effect.gen(function* () {
+    const setup = yield* Model.get(ProjectSetupModel);
+    const created = yield* Effect.fork(Event.waitFor(setup.outputs.created));
+
+    yield* Registry.allSettled(
+      Effect.gen(function* () {
+        yield* Event.emit(setup.inputs.setTemplate, "floorPlan");
+        yield* Event.emit(setup.ui.nameStep.ui.setName, "Lobby refresh");
+        yield* Event.emit(setup.ui.nameStep.ui.submit);
+      }),
+    );
+
+    assert.deepStrictEqual(yield* Fiber.join(created), {
+      name: "Lobby refresh",
+      template: "floorPlan",
+    });
+  }).pipe(Effect.provide(testLayer)),
+);
+```
+
+  </TabItem>
+</Tabs>
+
+The UI never subscribes to private state and never imports child internals. It
+only receives ports. The parent model owns the flow; the child model owns its
+small domain; tests drive public events and assert public outputs.
+
+## Why It Exists
+
+Most UI state tools become a second runtime next to Effect. Unitflow makes the
+UI runtime an Effect runtime:
+
+- stores are scoped state, not global singletons
+- events are streamable facts and commands, not callback-only wires
+- models are Effect-powered controllers with declared ports
+- resources and mutations are async recipes over `Effect`, `Store`, and `Event`
+- tests run in isolated registries and wait for cascades deterministically
+
+## Reading Order
+
+Start with the primitive data flow:
+
+```txt
+Store  -> scoped state
+Event  -> streamable discrete messages
+Model  -> composition boundary over stores and events
+Resource / Mutation -> async reads and writes
+```
+
+Then apply it to UI through React Views that only bind declared ports.
+
+## Package Plan
+
+```txt
+@unitflow/core    Model, Store, Event, Registry, Resource, Mutation
+@unitflow/react   View.make, provider, hooks, and React re-exports
+```

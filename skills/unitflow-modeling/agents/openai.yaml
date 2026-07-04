@@ -1,0 +1,4 @@
+interface:
+  display_name: "Unitflow Modeling"
+  short_description: "Write scoped Unitflow models and tests"
+  default_prompt: "Use $unitflow-modeling to design a Unitflow model, View, and tests."

@@ -1,0 +1,198 @@
+---
+title: Overview
+description: Why Unitflow exists and how it maps Effect concepts into UI state.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Unitflow is an Effect-first state manager for UI applications.
+
+The goal is simple: keep Effect's mental model all the way into UI state.
+Dependency injection stays Effect DI. Event orchestration stays Stream-shaped.
+Long-running work stays Fiber-shaped. Lifetime stays Scope-shaped. UI logic
+lives in models instead of being scattered across React hooks.
+
+```txt
+Store     -> scoped state
+Event     -> streamable messages
+Model     -> feature logic boundary
+Resource  -> async reads
+Mutation  -> async writes
+View      -> render binding over model ports
+```
+
+## Why
+
+Effect already has strong answers for services, layers, streams, fibers,
+scopes, errors, and tests. UI state often forces those ideas through a separate
+runtime: hooks own part of the logic, callbacks connect another part, async
+state is modeled again, and tests learn the framework lifecycle instead of the
+business flow.
+
+Unitflow avoids that split. A feature is described with a small set of
+Effect-shaped primitives, and those primitives are composed through models.
+
+## Composition Example
+
+The useful shape is not a giant model. It is a parent model that orchestrates a
+flow, plus child models that own focused domains.
+
+<Tabs>
+  <TabItem label="Child model">
+
+```ts
+export class ProjectNameModel extends Model.Service<ProjectNameModel>()(
+  "examples/project-name",
+)({
+  make: Effect.gen(function* () {
+    const name = Store.make("");
+    const canSubmit = name.pipe(Store.map(isProjectNameReady));
+
+    const view = Store.combine([name, canSubmit], (name, canSubmit) => ({
+      name,
+      canSubmit,
+    }));
+
+    const setName = Event.setter(name);
+    const submitted = yield* Event.make<ProjectDraft>();
+
+    const submit = yield* Event.make<void>().pipe(
+      Event.handler(() =>
+        Effect.gen(function* () {
+          const current = normalize(yield* Store.get(name));
+          if (!isProjectNameReady(current)) return;
+
+          yield* Event.emit(submitted, { name: current });
+        }),
+      ),
+    );
+
+    return {
+      inputs: { setName, submit },
+      outputs: { submitted },
+      ui: { view, setName, submit },
+    };
+  }),
+}) {}
+```
+
+  </TabItem>
+  <TabItem label="Parent model">
+
+```ts
+export class ProjectSetupModel extends Model.Service<ProjectSetupModel>()(
+  "examples/project-setup",
+)({
+  make: Effect.gen(function* () {
+    const nameStep = yield* Model.get(ProjectNameModel);
+
+    const template = Store.make<Template>("ifc");
+    const view = template.pipe(Store.map((template) => ({ template })));
+    const created = yield* Event.make<ProjectCreated>();
+    const setTemplate = Event.setter(template);
+
+    yield* Registry.run(
+      Event.stream(nameStep.outputs.submitted).pipe(
+        Stream.mapEffect(({ name }) =>
+          Effect.gen(function* () {
+            const currentTemplate = yield* Store.get(template);
+            yield* Event.emit(created, {
+              name,
+              template: currentTemplate,
+            });
+          }),
+        ),
+      ),
+    );
+
+    return {
+      inputs: { setTemplate },
+      outputs: { created },
+      ui: { view, setTemplate, nameStep },
+    };
+  }),
+}) {}
+```
+
+  </TabItem>
+  <TabItem label="UI.tsx">
+
+```tsx
+export const ProjectNameStep = View.make(
+  ProjectNameModel,
+  ({ view, setName, submit }) => (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        submit();
+      }}
+    >
+      <input
+        value={view.name}
+        onChange={(event) => setName(event.currentTarget.value)}
+      />
+      <button disabled={!view.canSubmit}>Continue</button>
+    </form>
+  ),
+);
+
+export const ProjectSetupView = View.make(
+  ProjectSetupModel,
+  ({ view, setTemplate, nameStep }) => (
+    <section>
+      <ProjectNameStep unit={nameStep} />
+      <TemplateTabs value={view.template} onChange={setTemplate} />
+    </section>
+  ),
+);
+```
+
+  </TabItem>
+  <TabItem label="Test">
+
+```ts
+it.effect("emits the final project event", () =>
+  Effect.gen(function* () {
+    const setup = yield* Model.get(ProjectSetupModel);
+    const created = yield* Effect.fork(Event.waitFor(setup.outputs.created));
+
+    yield* Registry.allSettled(
+      Effect.gen(function* () {
+        yield* Event.emit(setup.inputs.setTemplate, "floorPlan");
+        yield* Event.emit(setup.ui.nameStep.ui.setName, "Lobby refresh");
+        yield* Event.emit(setup.ui.nameStep.ui.submit);
+      }),
+    );
+
+    assert.deepStrictEqual(yield* Fiber.join(created), {
+      name: "Lobby refresh",
+      template: "floorPlan",
+    });
+  }).pipe(Effect.provide(testLayer)),
+);
+```
+
+  </TabItem>
+</Tabs>
+
+The child can be replaced by a test layer because it is a model service. The
+parent never reaches into React. The view receives values and callbacks already
+bound by `View.make`.
+
+## Pressure It Removes
+
+- feature logic has one home instead of being split between hooks and services
+- public inputs, outputs, and UI ports are explicit
+- events can be composed as streams instead of callback chains
+- async state follows Effect instead of custom loading/error conventions
+- child features can be composed without importing their internals
+- tests can drive inputs and assert outputs without mounting private pieces
+
+## Non Goals
+
+- Reimplement all of Effector.
+- Make callbacks the orchestration language.
+- Hide Effect behind a new effect system.
+- Make React hooks the owner of business state.
+
+Unitflow should feel like Effect carried directly into UI state management.

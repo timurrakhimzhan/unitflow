@@ -1,0 +1,49 @@
+{
+  "name": "@unitflow/core",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Effect-native scoped UI state manager core.",
+  "license": "MIT",
+  "sideEffects": false,
+  "files": ["dist"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./event": {
+      "types": "./dist/event.d.ts",
+      "default": "./dist/event.js"
+    },
+    "./model": {
+      "types": "./dist/model.d.ts",
+      "default": "./dist/model.js"
+    },
+    "./registry": {
+      "types": "./dist/registry.d.ts",
+      "default": "./dist/registry.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "default": "./dist/runtime.js"
+    },
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "default": "./dist/store.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.88"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.0.0-beta.88",
+    "effect": "4.0.0-beta.88",
+    "vitest": "3.2.4"
+  }
+}

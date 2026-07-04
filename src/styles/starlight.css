@@ -1,0 +1,107 @@
+:root {
+  --sl-color-accent-low: #d7ede5;
+  --sl-color-accent: #1d6f5f;
+  --sl-color-accent-high: #0e3f38;
+  --sl-color-white: #fbfaf6;
+  --sl-color-gray-1: #f4f2ea;
+  --sl-color-gray-2: #d9ded8;
+  --sl-color-gray-3: #a9b2ad;
+  --sl-color-gray-4: #737d78;
+  --sl-color-gray-5: #3f4844;
+  --sl-color-gray-6: #202723;
+  --sl-color-black: #141815;
+}
+
+:root[data-theme="light"] {
+  --sl-color-white: #161616;
+  --sl-color-black: #fbfaf6;
+  --sl-color-gray-1: #202723;
+  --sl-color-gray-2: #3f4844;
+  --sl-color-gray-3: #737d78;
+  --sl-color-gray-4: #a9b2ad;
+  --sl-color-gray-5: #d9ded8;
+  --sl-color-gray-6: #f4f2ea;
+  --sl-color-gray-7: #fbfaf6;
+}
+
+.hero img {
+  filter: none;
+}
+
+.hero > .hero-html {
+  width: min(100%, 42rem);
+}
+
+.unitflow-hero-code {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--sl-color-gray-5), transparent 24%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--sl-color-black), var(--sl-color-gray-6) 28%);
+  box-shadow: 0 24px 70px color-mix(in srgb, var(--sl-color-black), transparent 68%);
+}
+
+.unitflow-code-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.55rem 0.65rem 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--sl-color-gray-5), transparent 32%);
+}
+
+.unitflow-code-tab {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0 0.8rem;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: transparent;
+  color: var(--sl-color-gray-3);
+  cursor: pointer;
+  font: 600 0.8rem/1 var(--__sl-font-mono);
+}
+
+.unitflow-code-tab-active {
+  border-color: color-mix(in srgb, var(--sl-color-gray-5), transparent 32%);
+  background: color-mix(in srgb, var(--sl-color-gray-6), transparent 32%);
+  color: var(--sl-color-white);
+}
+
+.unitflow-code-panel {
+  display: none;
+  margin: 0;
+  padding: 1rem 1.1rem 1.15rem;
+  overflow-x: auto;
+  color: var(--sl-color-gray-2);
+  font: 0.83rem/1.65 var(--__sl-font-mono);
+}
+
+.unitflow-code-panel code {
+  font: inherit;
+}
+
+.unitflow-code-panel-active {
+  display: block;
+}
+
+.unitflow-hero-code .uf-muted {
+  color: #7dd3c7;
+}
+
+.unitflow-hero-code .uf-keyword {
+  color: #f1c27d;
+}
+
+@media (min-width: 50rem) {
+  .hero {
+    grid-template-columns: minmax(18rem, 0.85fr) minmax(30rem, 1.15fr);
+  }
+}
+
+@media (max-width: 38rem) {
+  .unitflow-hero-code pre {
+    font-size: 0.74rem;
+  }
+}
