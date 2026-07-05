@@ -10,7 +10,9 @@ export default defineConfig({
       title: "Unitflow",
       description: "Effect-native UI state management with scoped models.",
       logo: {
-        src: "./src/assets/unitflow-logo.svg",
+        dark: "./src/assets/unitflow-logo-dark.svg",
+        light: "./src/assets/unitflow-logo.svg",
+        alt: "Unitflow",
       },
       social: [
         {

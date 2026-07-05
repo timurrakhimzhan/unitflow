@@ -50,8 +50,12 @@
   flex-shrink: 0;
   width: clamp(2.5rem, 6vw, 3.75rem);
   aspect-ratio: 176.67312622070312 / 136.37550354003906;
-  background: url("../assets/unitflow-logo.svg") center / contain no-repeat;
+  background: url("../assets/unitflow-logo-dark.svg") center / contain no-repeat;
   filter: drop-shadow(0 10px 22px color-mix(in srgb, var(--sl-color-black), transparent 74%));
+}
+
+:root[data-theme="light"] .hero [data-page-title]::before {
+  background-image: url("../assets/unitflow-logo.svg");
 }
 
 /* Vertical, centered hero at every width: cancel Starlight's desktop
