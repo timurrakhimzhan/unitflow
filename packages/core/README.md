@@ -7,9 +7,9 @@ state, events represent actions, queries own async reads, and mutations own
 async writes. Models give those primitives an Effect service boundary with
 dependencies, lifetime, and typed ports.
 
-Unitflow is inspired by [Effector](https://effector.dev/): explicit stores,
-events, and UI logic outside the component tree, rebuilt around Effect services,
-layers, scopes, and dependency injection.
+Unitflow is inspired by [Effector](https://github.com/effector/effector):
+explicit stores, events, and UI logic outside the component tree, rebuilt
+around Effect services, layers, scopes, and dependency injection.
 
 ## Install
 

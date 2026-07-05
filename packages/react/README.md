@@ -6,9 +6,9 @@ React binding for Unitflow.
 `Unitflow`, `View.make`, `useStore`, and `useEvent`. Stores and events stay in
 models; React binds only the model's public `ui` surface.
 
-Unitflow is inspired by [Effector](https://effector.dev/): explicit stores,
-events, and UI logic outside the component tree, rebuilt around Effect services,
-layers, scopes, and dependency injection.
+Unitflow is inspired by [Effector](https://github.com/effector/effector):
+explicit stores, events, and UI logic outside the component tree, rebuilt
+around Effect services, layers, scopes, and dependency injection.
 
 ## Install
 
