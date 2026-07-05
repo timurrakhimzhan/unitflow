@@ -26,7 +26,7 @@ const seededTasks: Record<string, TaskState> = {
   },
   "task-2": {
     id: "task-2",
-    title: "Wire resource states",
+    title: "Wire query states",
     status: "doing",
     assignee: "Noah",
     blocked: true,
@@ -54,9 +54,9 @@ export class TaskModel extends Model.Service<TaskModel>()(
 )<TaskKey>()({
   make: ({ id }) =>
     Effect.gen(function* () {
-      const state = Store.make<TaskState>(initialTask(id), { name: `task:${id}` });
+      const state = Store.make<TaskState>(initialTask(id));
 
-      const rename = yield* Event.make<string>({ name: `task:${id}.rename` }).pipe(
+      const rename = yield* Event.make<string>().pipe(
         Event.handler((title) =>
           Store.update(state, (task) => ({
             ...task,
@@ -65,11 +65,11 @@ export class TaskModel extends Model.Service<TaskModel>()(
         ),
       );
 
-      const move = yield* Event.make<TaskStatus>({ name: `task:${id}.move` }).pipe(
+      const move = yield* Event.make<TaskStatus>().pipe(
         Event.handler((status) => Store.update(state, (task) => ({ ...task, status }))),
       );
 
-      const assign = yield* Event.make<string>({ name: `task:${id}.assign` }).pipe(
+      const assign = yield* Event.make<string>().pipe(
         Event.handler((assignee) =>
           Store.update(state, (task) => ({
             ...task,
@@ -78,7 +78,7 @@ export class TaskModel extends Model.Service<TaskModel>()(
         ),
       );
 
-      const toggleBlocked = yield* Event.make<void>({ name: `task:${id}.toggleBlocked` }).pipe(
+      const toggleBlocked = yield* Event.make<void>().pipe(
         Event.handler(() => Store.update(state, (task) => ({ ...task, blocked: !task.blocked }))),
       );
 
@@ -95,7 +95,7 @@ export class BoardModel extends Model.Service<BoardModel>()(
 )({
   make: () =>
     Effect.gen(function* () {
-      const draft = Store.make("", { name: "draft" });
+      const draft = Store.make("");
       const tasks = yield* Model.list(TaskModel);
 
       yield* tasks.push({ id: "task-1" });
@@ -103,7 +103,7 @@ export class BoardModel extends Model.Service<BoardModel>()(
       yield* tasks.push({ id: "task-3" });
 
       const taskStates = tasks.select((task) => task.outputs.state);
-      const view = Store.combine([draft, taskStates], (draft, taskStates) => {
+      const boardState = Store.combine([draft, taskStates], (draft, taskStates) => {
         const counts = {
           todo: taskStates.filter((task) => task.status === "todo").length,
           doing: taskStates.filter((task) => task.status === "doing").length,
@@ -115,7 +115,7 @@ export class BoardModel extends Model.Service<BoardModel>()(
 
       let nextTaskId = 4;
 
-      const create = yield* Event.make<void>({ name: "createTask" }).pipe(
+      const create = yield* Event.make<void>().pipe(
         Event.handler(() =>
           Effect.gen(function* () {
             const title = (yield* Store.get(draft)).trim();
@@ -129,11 +129,11 @@ export class BoardModel extends Model.Service<BoardModel>()(
         ),
       );
 
-      const remove = yield* Event.make<string>({ name: "removeTask" }).pipe(
+      const remove = yield* Event.make<string>().pipe(
         Event.handler((id) => tasks.remove({ id })),
       );
 
-      const clearDone = yield* Event.make<void>({ name: "clearDone" }).pipe(
+      const clearDone = yield* Event.make<void>().pipe(
         Event.handler(() =>
           Effect.gen(function* () {
             const current = yield* Store.get(taskStates);
@@ -146,7 +146,7 @@ export class BoardModel extends Model.Service<BoardModel>()(
         ),
       );
 
-      const reopenFirstBlocked = yield* Event.make<void>({ name: "reopenFirstBlocked" }).pipe(
+      const reopenFirstBlocked = yield* Event.make<void>().pipe(
         Event.handler(() =>
           Effect.gen(function* () {
             const current = yield* Store.get(taskStates);
@@ -166,9 +166,9 @@ export class BoardModel extends Model.Service<BoardModel>()(
         inputs: {},
         outputs: { taskStates },
         ui: {
-          view,
+          boardState,
           taskUnits: tasks.items,
-          setDraft: Event.setter(draft, { name: "setDraft" }),
+          setDraft: Event.setter(draft),
           create,
           remove,
           clearDone,

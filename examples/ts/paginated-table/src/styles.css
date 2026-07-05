@@ -1,0 +1,161 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  color: #18202e;
+  background: #f0f4f2;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+select {
+  font: inherit;
+  min-height: 40px;
+  border: 1px solid #c8d3d1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+button {
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+button:hover:enabled {
+  border-color: #647a76;
+}
+
+button:disabled {
+  color: #7c8894;
+  cursor: default;
+}
+
+.table-shell {
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: 26px;
+}
+
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.table-toolbar h1 {
+  margin: 0;
+  margin-right: auto;
+  font-size: 22px;
+}
+
+.table-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.table-toolbar select {
+  padding: 0 8px;
+}
+
+.repo-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #ffffff;
+  border: 1px solid #dbe4e1;
+  border-radius: 12px;
+  overflow: visible;
+}
+
+.repo-table th,
+.repo-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid #e6ecea;
+  font-size: 14px;
+}
+
+.repo-table th {
+  color: #52606d;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.repo-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table-status {
+  color: #52606d;
+}
+
+.table-footer {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0;
+}
+
+/* Popover: anchored to the trigger, opens below it, right-aligned so the
+ * last column never overflows the table. */
+.popover-anchor {
+  position: relative;
+  display: inline-block;
+}
+
+.popover-trigger {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 13px;
+  background: #eef4f2;
+  border-color: #d3dedb;
+}
+
+.popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  width: 260px;
+  background: #ffffff;
+  border: 1px solid #c8d3d1;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(24, 32, 46, 0.16);
+}
+
+.popover-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 0;
+}
+
+.popover-status {
+  padding: 10px 14px;
+  color: #52606d;
+  font-size: 13px;
+}
+
+.contributor-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.contributor-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.contributor-commits {
+  color: #52606d;
+  white-space: nowrap;
+}

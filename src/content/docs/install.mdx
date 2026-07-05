@@ -1,0 +1,50 @@
+---
+title: Install
+description: Install @unitflow/core and @unitflow/react with their peer dependencies.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+For React apps, install the React package with its peers:
+
+<Tabs>
+  <TabItem label="pnpm">
+
+```sh
+pnpm add @unitflow/react @unitflow/core effect@4.0.0-beta.88 react
+```
+
+  </TabItem>
+  <TabItem label="npm">
+
+```sh
+npm install @unitflow/react @unitflow/core effect@4.0.0-beta.88 react
+```
+
+  </TabItem>
+  <TabItem label="yarn">
+
+```sh
+yarn add @unitflow/react @unitflow/core effect@4.0.0-beta.88 react
+```
+
+  </TabItem>
+</Tabs>
+
+For non-React runtimes, install the core package:
+
+```sh
+pnpm add @unitflow/core effect@4.0.0-beta.88
+```
+
+Packages:
+
+- [`@unitflow/core`](https://www.npmjs.com/package/@unitflow/core)
+- [`@unitflow/react`](https://www.npmjs.com/package/@unitflow/react)
+
+`effect` is a peer dependency pinned to `4.0.0-beta.88` — a beta with breaking
+changes between releases, so keep the version explicit rather than a caret
+range until Unitflow tracks a stable Effect release.
+
+Continue with [Overview](./overview.mdx) for the core ideas, or jump straight
+to [Stores](./store.md) to start writing model state.

@@ -2,35 +2,57 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
 export default defineConfig({
+  devToolbar: {
+    enabled: false,
+  },
   integrations: [
     starlight({
       title: "Unitflow",
-      description: "Effect-native UI state management with scoped models and typed ports.",
+      description: "Effect-native UI state management with scoped models.",
+      logo: {
+        src: "./src/assets/unitflow-logo.svg",
+      },
       customCss: ["./src/styles/starlight.css"],
       sidebar: [
         {
-          label: "Start Here",
+          label: "Learn Unitflow",
           items: [
             { slug: "overview" },
+            { slug: "install" },
             { slug: "store" },
             { slug: "events" },
-            { slug: "model-contract" },
-            { slug: "resource-mutation" },
+            { slug: "model" },
           ],
         },
         {
-          label: "Patterns",
+          label: "Async",
+          items: [
+            { slug: "queries" },
+            { slug: "mutations" },
+          ],
+        },
+        {
+          label: "React and Tests",
           items: [
             { slug: "react" },
             { slug: "testing" },
+          ],
+        },
+        {
+          label: "Advanced",
+          items: [
+            { slug: "streams" },
             { slug: "lifetime" },
           ],
         },
         {
           label: "Examples",
           items: [
-            { slug: "examples/project-picker" },
-            { slug: "examples/render-model" },
+            { slug: "examples/counter" },
+            { slug: "examples/query-search" },
+            { slug: "examples/task-board" },
+            { slug: "examples/paginated-table" },
+            { slug: "examples/optimistic-todos" },
           ],
         },
       ],

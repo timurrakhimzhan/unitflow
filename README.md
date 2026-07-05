@@ -37,8 +37,8 @@ scripts/                      Local validation helpers
 The npm package split:
 
 ```txt
-@unitflow/core    Model, Store, Event, Registry, ModelRuntime
-@unitflow/react   React binding, View.make, provider, hooks
+@unitflow/core    Model, Store, Event, Registry, Query, Mutation
+@unitflow/react   React binding, Unitflow root, View.make, hooks
 ```
 
 `@unitflow/react` depends on `@unitflow/core` and re-exports the common core API

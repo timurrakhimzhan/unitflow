@@ -58,21 +58,6 @@ class RenderModel extends Model.Service<RenderModel>()(
     }),
 }) {}
 
-interface NestedKey {
-  readonly project: { readonly id: string };
-}
-
-class NestedKeyModel extends Model.Service<NestedKeyModel>()(
-  "/test/view-test/NestedKeyModel",
-)<NestedKey>()({
-  make: () =>
-    Effect.sync(() => ({
-      inputs: {},
-      outputs: {},
-      ui: {},
-    })),
-}) {}
-
 describe("View.make", () => {
   it("hands the render callback bound units — values and callbacks (type-level)", () => {
     const CounterView = View.make(CounterModel, (units) => {
@@ -97,7 +82,7 @@ describe("View.make", () => {
     );
   });
 
-  it("requires a key for keyed views and none for singletons (type-level)", () => {
+  it("every View requires its unit — parents or Unitflow hand it down (type-level)", () => {
     const CounterView = View.make(CounterModel, () => null);
     const RenderView = View.make(RenderModel, (units) => {
       const label: string = units.labelStore;
@@ -105,21 +90,41 @@ describe("View.make", () => {
       return null;
     });
 
-    const NestedView = View.make(NestedKeyModel, () => null);
+    // Типовые свидетели: в рантайме не используются, JSX ниже не рендерится.
+    // eslint-disable-next-line revizo/no-type-assertion
+    const counterUnit = null as unknown as Model.PortsOf<typeof CounterModel>;
+    // eslint-disable-next-line revizo/no-type-assertion
+    const renderUnit = null as unknown as Model.PortsOf<typeof RenderModel>;
 
-    const singleton = <CounterView />;
-    const keyed = <RenderView unitKey={{ id: "first" }} />;
-    // @ts-expect-error keyed views require their unit key
-    const missingKey = <RenderView />;
-    // @ts-expect-error the key must match the model's key type
-    const wrongKey = <RenderView unitKey={{ id: 1 }} />;
-    // @ts-expect-error a unit key must be FLAT plain data (Model.KeyInput)
-    const nestedKey = <NestedView unitKey={{ project: { id: "p1" } }} />;
+    const singleton = <CounterView unit={counterUnit} />;
+    const keyed = <RenderView unit={renderUnit} />;
+    // @ts-expect-error a View cannot render without its unit
+    const bareSingleton = <CounterView />;
+    // @ts-expect-error a View cannot render without its unit
+    const bareKeyed = <RenderView />;
+    // @ts-expect-error resolving by key from JSX is gone: models own instances
+    const byKey = <RenderView unitKey={{ id: "first" }} />;
 
     assert.isDefined(singleton);
     assert.isDefined(keyed);
-    assert.isDefined(missingKey);
-    assert.isDefined(wrongKey);
-    assert.isDefined(nestedKey);
+    assert.isDefined(bareSingleton);
+    assert.isDefined(bareKeyed);
+    assert.isDefined(byKey);
+  });
+
+  it("rejects headless models — View.make requires a ui section (type-level)", () => {
+    class HeadlessModel extends Model.Service<HeadlessModel>()(
+      "/test/view-test/HeadlessModel",
+    )({
+      make: () =>
+        Effect.gen(function* () {
+          const total = Store.make(0);
+          return { inputs: {}, outputs: { total } };
+        }),
+    }) {}
+
+    // @ts-expect-error a model without a ui section is not Viewable
+    const HeadlessView = View.make(HeadlessModel, () => null);
+    assert.isDefined(HeadlessView);
   });
 });

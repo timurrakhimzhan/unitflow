@@ -1,114 +1,176 @@
 ---
-title: Store
-description: Scoped state sources, derived stores, updates, and resets.
+title: Stores
+description: Model state with Store.make, Store.get, Store.set, derived values, and change actions.
 ---
 
-A Store is scoped state owned by a registry. It is not a global singleton and it
-is not React state.
+A store is state owned by a model instance.
 
-Use stores for values that should be read by UI, composed by other stores, or
-observed by model logic.
+Use it for form fields, selected ids, counters, filters, derived render data, and
+small pieces of domain state that should live with the model. A store is scoped
+by the Unitflow registry: every app runtime or test registry gets its own
+state.
 
 ## Create
 
 ```ts
-const open = Store.make(false);
+import { Store } from "@unitflow/core";
 
-const draft = Store.make<ProjectDraft>({
+const count = Store.make(0);
+
+const draft = Store.make({
   name: "",
   description: "",
 });
 ```
 
-The initial value belongs to the store definition. Every registry gets its own
-copy of the state.
+The initial value belongs to the store declaration. A fresh registry starts
+from that value.
 
-## Combine
+## Read
 
-Derived state should be a store too. Do not recompute view state in React.
+Read the current value inside an Effect with `Store.get`.
 
 ```ts
-const canSave = Store.combine(
-  [draft, saving],
-  (draft, saving) => draft.name.trim().length > 0 && !saving,
+const current = yield* Store.get(count);
+```
+
+## Write
+
+Use `Store.set` when the next value is known.
+
+```ts
+yield* Store.set(count, 1);
+```
+
+Use `Store.update` when the next value depends on the current value.
+
+```ts
+yield* Store.update(count, (value) => value + 1);
+```
+
+Reset one or more stores to their declared initial values.
+
+```ts
+yield* Store.reset(count, draft);
+```
+
+In normal model code, writes happen inside event handlers, queries, mutations,
+or other Effects owned by the model.
+
+## Derive
+
+Use `.pipe(Store.map(...))` for one store.
+
+```ts
+const count = Store.make(0);
+
+const isEven = count.pipe(Store.map((value) => value % 2 === 0));
+```
+
+Use `Store.combine` when a value depends on several stores.
+
+```ts
+const firstName = Store.make("");
+const lastName = Store.make("");
+
+const fullName = Store.combine(
+  [firstName, lastName],
+  (firstName, lastName) => `${firstName} ${lastName}`.trim(),
 );
-
-const view = Store.combine([open, draft, canSave], (open, draft, canSave) => ({
-  open,
-  draft,
-  canSave,
-}));
 ```
 
-Combined stores are read-only derived sources. Write to the source stores, not
-to the combined store.
+Derived stores are read-only. Write to the original stores.
 
-## Set And Update
+## UI Setters
 
-Set when the next value is already known.
+`Event.setter(store)` creates a model action that writes a store. It is useful
+for input fields where the UI sends the next value directly.
 
-```ts
-yield* Store.set(open, true);
+```tsx
+import { Event, Store } from "@unitflow/core";
+import { useEvent, useStore } from "@unitflow/react";
+
+const input = Store.make("");
+const setInput = Event.setter(input);
+
+function TextInput() {
+  const value = useStore(input);
+  const onChange = useEvent(setInput);
+
+  return (
+    <input
+      value={value}
+      onChange={(event) => onChange(event.currentTarget.value)}
+    />
+  );
+}
 ```
 
-Update when the next value depends on the current value.
+## React to Changes
+
+Use `Store.changed(store)` when a later store change should trigger model
+logic. It creates an event that skips the current value and emits only future
+changes.
 
 ```ts
-yield* Store.update(draft, (current) => ({
-  ...current,
-  name: current.name.trim(),
-}));
-```
+import * as Effect from "effect/Effect";
+import { Event, Store } from "@unitflow/core";
 
-For UI binding, expose event sinks instead of exposing store write operations
-directly.
+const query = Store.make("");
 
-```ts
-const setOpen = Event.setter(open);
-
-const rename = yield* Event.make<string>().pipe(
-  Event.handler((name) =>
-    Store.update(draft, (current) => ({
-      ...current,
-      name,
-    })),
+// Store.changed converts a Store into an Event of future changes.
+yield* query.pipe(
+  Store.changed,
+  Event.handler((value) =>
+    Effect.log(`query changed to ${value}`),
   ),
 );
 ```
 
-## Reset
+This is the simple way to subscribe to store changes inside a model. Reach for
+raw `Store.stream(...)` only when you need stream operators such as debounce,
+merge, throttle, or schedules.
 
-Reset should be a first-class store operation: return the store to its initial
-value without duplicating that value in handlers.
+## Awaiting Store Values
 
-```ts
-yield* Store.reset(draft);
-```
-
-If `Store.reset` is not implemented yet, it should be added as a primitive. A
-reset is conceptually different from `Store.set(draft, initialDraft)` because
-the initial value belongs to the store.
-
-## Public Ports
-
-Expose stores by capability:
+Use `Store.waitFor(store, predicate)` when an Effect needs to block until a
+store reaches a matching value.
 
 ```ts
-return {
-  inputs: {
-    rename,
-  },
-  outputs: {
-    draft,
-    canSave,
-  },
-  ui: {
-    view,
-    setOpen,
-    rename,
-  },
-};
+const ready = yield* Store.waitFor(status, (value) => value === "ready");
 ```
 
-Other models can read `outputs`. Views receive `ui` stores as current values and
-event sinks as callbacks.
+## Persistence
+
+Use `Store.persist(...)` to keep a store's value in a `KeyValueStore` across
+sessions — filters, drafts, UI preferences.
+
+```ts
+import * as Schema from "effect/Schema";
+
+type LanguageFilter = "all" | "TypeScript" | "Rust";
+const LanguageSchema = Schema.Literals(["all", "TypeScript", "Rust"]);
+
+const language = yield* Store.make<LanguageFilter>("all").pipe(
+  Store.persist({ key: "language", schema: LanguageSchema }),
+);
+```
+
+Match the schema to the store's exact type: for a literal-union store use
+`Schema.Literals(...)`, not `Schema.String`. A wider schema compiles (stores
+are covariant), but it would happily hydrate any stored string into a store
+whose type promises a literal union — the schema is the only runtime guard.
+
+Hydration is inline: by the time `persist` returns, the store already holds
+the restored value, so anything built on it afterwards — a dependent query, a
+combined store — sees the restored value from its first run. Every later
+change is saved with a timestamp; an entry that fails to decode or outlives
+`timeToLive` is a miss, leaving the initial value in place. Persistence is
+best-effort: storage and codec errors are logged as warnings and never affect
+the store itself.
+
+The requirements gain `KeyValueStore` — the same layers as
+[Query persistence](./queries.md#persistence): `layerStorage(() =>
+localStorage)` in the browser, `layerMemory` in tests.
+
+How a model exposes stores and events is covered in [Model](./model.mdx).

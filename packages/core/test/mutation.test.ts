@@ -11,7 +11,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import { Event, Model, Registry, Store } from "../src/index.js";
 import * as Mutation from "../src/mutation.js";
-import * as Resource from "../src/resource.js";
+import * as Query from "../src/query.js";
 
 type BoundUi<Ui> = {
   readonly [K in keyof Ui]: Ui[K] extends Store.Source<infer A>
@@ -123,7 +123,7 @@ describe("Mutation", () => {
   it.effect("invalidates emits every target's refresh after a successful run", () =>
     Effect.gen(function* () {
       let listCalls = 0;
-      const list = yield* Resource.make(
+      const list = yield* Query.make(
         Effect.sync(() => {
           listCalls += 1;
           return listCalls;

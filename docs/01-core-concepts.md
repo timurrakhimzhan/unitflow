@@ -1,70 +1,76 @@
 # Core Concepts
 
-## Model
+## Stores
 
-A model is an Effect service that returns ports.
+A store is state owned by a model instance.
 
 ```ts
-export class ProjectPickerModel extends Model.Service<ProjectPickerModel>()(
-  "features/project-picker",
-)<ProjectPickerKey>()({
-  make: (key) =>
-    Effect.gen(function* () {
-      const projects = yield* Model.get(ProjectsEntityModel);
-      const selected = Event.make<ProjectPickerEvent>();
+const count = Store.make(0);
 
-      return {
-        inputs: {},
-        outputs: { selected },
-        ui: {},
-      };
-    }),
-}) {}
+const current = yield* Store.get(count);
+yield* Store.set(count, 1);
+yield* Store.update(count, (value) => value + 1);
+
+const doubled = count.pipe(Store.map((value) => value * 2));
 ```
 
-Singleton models omit the key parameter. Dynamic models use a flat, plain-data
-key so equivalent keys resolve the same instance.
-
-## Store
-
-A Store is scoped state owned by the registry, not a global singleton.
+Use `Store.changed` when later store changes should trigger model logic.
 
 ```ts
-const open = Store.make(false);
-const canSave = Store.combine([dirty, saving], (dirty, saving) => dirty && !saving);
-const setOpen = Event.setter(open);
-```
+const countChanged = yield* count.pipe(Store.changed);
 
-Public model ports narrow capabilities:
-
-- `inputs`: sink-capable ports
-- `outputs`: source-capable ports
-- `ui`: source values and event sinks for rendering
-
-## Event
-
-An Event is a streamable discrete message.
-
-```ts
-const save = yield* Event.make<SaveRequest>().pipe(
-  Event.handler((request) => persist(request)),
+yield* countChanged.pipe(
+  Event.handler((value) => Effect.log(`count changed to ${value}`)),
 );
 ```
 
-Use `Event.handler` for "on event, run this Effect". Use `Registry.run` for
-stream-shaped logic such as filtering, combining, debouncing, or listening to
-another model's outputs.
-
-## Registry
-
-A Registry owns stores, event channels, fibers, and model instances for one
-runtime/test scope.
-
-Tests should drive models like users or parent models do:
+Use `Store.persist({ key, schema, timeToLive? })` to keep a store's value in
+a `KeyValueStore` across sessions. Hydration is inline — the returned store
+already holds the restored value, so a dependent query loads once with it.
+Best-effort, same rules as `Query.persist`: decode failures and expired
+entries are misses, storage errors are logged and swallowed. Match the schema
+to the store's exact type — a literal-union store needs `Schema.Literals`,
+the schema is the only runtime guard against stale stored shapes.
 
 ```ts
-yield* Registry.allSettled(Event.emit(model.inputs.submit, value));
-assert.deepStrictEqual(yield* Store.get(model.outputs.state), expected);
+const language = yield* Store.make<"all" | "rust">("all").pipe(
+  Store.persist({ key: "language", schema: Schema.Literals(["all", "rust"]) }),
+);
 ```
 
-No manual port mounting. No generic flush helpers.
+## Events
+
+An event is a model action.
+
+```ts
+const increment = yield* Event.make<number>().pipe(
+  Event.handler((amount) =>
+    Store.update(count, (value) => value + amount),
+  ),
+);
+
+yield* Event.emit(increment, 1);
+```
+
+Use `Event.handler` for direct reactions. Use streams only when the connection
+needs operators such as filtering, debouncing, merging, schedules, or
+long-running producers.
+
+## Model Wiring
+
+Parents connect child outputs to parent state or parent outputs.
+
+```ts
+const picker = yield* Model.get(ProjectPickerModel, { id: "project-picker" });
+const selected = Event.make<ProjectId>();
+
+yield* picker.outputs.selected.pipe(
+  Event.handler((id) => Event.emit(selected, id)),
+);
+
+return {
+  inputs: {},
+  outputs: { selected },
+  ui: { picker },
+};
+```

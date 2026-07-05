@@ -28,12 +28,12 @@ interface ModelResultDefinition extends Data.TaggedEnum.WithGenerics<2> {
 export const ModelResult = Data.taggedEnum<ModelResultDefinition>();
 
 /**
- * The bridge between the model runtime and a UI framework: synchronous
+ * The bridge between the Unitflow runtime and a UI framework: synchronous
  * snapshots plus subscriptions, the shape `useSyncExternalStore` needs.
  * `Registry.layer` is provided automatically — pass the model and
  * service layers.
  */
-export interface ModelRuntime<R, ER> {
+export interface UnitflowRuntime<R, ER> {
   readonly runtime: ManagedRuntime.ManagedRuntime<R | Registry, ER>;
   readonly getStore: <A>(store: Store.Source<A>) => A;
   readonly subscribeStore: <A>(store: Store.Source<A>, listener: () => void) => () => void;
@@ -68,7 +68,7 @@ const notify = (listeners: Set<() => void>): void => {
   for (const listener of listeners) listener();
 };
 
-export const make = <R, ER>(layer: Layer.Layer<R, ER, Registry>): ModelRuntime<R, ER> => {
+export const make = <R, ER>(layer: Layer.Layer<R, ER, Registry>): UnitflowRuntime<R, ER> => {
   const runtime = ManagedRuntime.make(layer.pipe(Layer.provideMerge(Registry.layer)));
   const storeEntries = new Map<string, StoreEntry>();
   // Structural keying, mirroring the registry's own instance map.

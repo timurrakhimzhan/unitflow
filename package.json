@@ -9,6 +9,7 @@
     "build": "astro build",
     "packages:build": "pnpm --filter @unitflow/core --filter @unitflow/react build",
     "packages:test": "pnpm --filter @unitflow/core --filter @unitflow/react test",
+    "bench": "pnpm --filter @unitflow/benchmarks bench",
     "examples:build": "pnpm --filter '@unitflow/example-*' build",
     "astro:check": "astro check",
     "docs:check": "node scripts/check-docs.mjs && pnpm astro:check && pnpm build",

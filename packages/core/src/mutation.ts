@@ -97,7 +97,7 @@ export const call = <I, A, E>(
 
 /** After each successful run, emits every target's `refresh`: the mutation
  * analogue of the old reactivity-key invalidation. Targets are anything with
- * a `refresh` sink (a `Resource`, a model's `inputs`, ...). */
+ * a `refresh` sink (a `Query`, a model's `inputs`, ...). */
 export const invalidates =
   (...targets: ReadonlyArray<{ readonly refresh: Event.Sink<void> }>) =>
   <I, A, E, EffE, R>(

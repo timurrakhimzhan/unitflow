@@ -1,94 +1,135 @@
 ---
 title: Events
-description: Streamable discrete messages, handlers, and registry pipelines.
+description: Model actions with Event.make, Event.emit, Event.handler, combining, and waiting.
 ---
 
-An Event is a streamable discrete message. Use events for actions, facts, and
-control ports.
+An event is a model action.
 
-Events are not callbacks as the orchestration model. A View may receive an event
-sink as a callback, but inside the model the event is still a typed stream.
+Use events for things that happen at a point in time: rename, submit, remove,
+open, retry, saved. Stores hold current state; events trigger model behavior.
 
-## Create And Emit
+## Create and Emit
+
+`Event.make` creates the action. `Event.emit` fires it from another Effect, a
+parent model, or a test.
 
 ```ts
-const opened = yield* Event.make<void>();
-const renamed = yield* Event.make<string>();
+import { Event } from "@unitflow/core";
 
-yield* Event.emit(opened, undefined);
-yield* Event.emit(renamed, "Main lobby");
+const renamed = Event.make<string>();
+const submitted = Event.make<void>();
+
+yield* Event.emit(renamed, "Lobby refresh");
+yield* Event.emit(submitted);
 ```
 
-Events can be exposed as inputs, outputs, or UI callbacks depending on who is
-allowed to emit or observe them.
+Inside a React View, actions returned from `ui` are rendered as functions.
 
-## Handler
+```tsx
+<button type="button" onClick={() => submitted()}>
+  Submit
+</button>
+```
 
-Use `Event.handler` when one event should run one Effect.
+## Handle
+
+Use `Event.handler` for the common case: when an action fires, run one Effect.
 
 ```ts
+import * as Effect from "effect/Effect";
+import { Event, Store } from "@unitflow/core";
+
+const count = Store.make(0);
+
 const increment = yield* Event.make<number>().pipe(
-  Event.handler((amount) => Store.update(count, (current) => current + amount)),
+  Event.handler((amount) =>
+    Store.update(count, (value) => value + amount),
+  ),
 );
 ```
 
-Handlers can update stores and emit other events.
+Handlers run sequentially by default. If `increment` fires twice, the second
+handler waits for the first one.
+
+If the work can fail, handle the error inside the handler and turn it into
+state or another event. A handler is an owned model pipeline and should keep
+running.
 
 ```ts
-const selected = yield* Event.make<ProjectTarget>();
-const committed = yield* Event.make<ProjectTarget>();
+const error = Store.make<string | null>(null);
 
-const select = yield* Event.make<ProjectTarget>().pipe(
-  Event.handler((target) =>
+const submit = yield* Event.make<string>().pipe(
+  Event.handler((name) =>
+    saveName(name).pipe(
+      Effect.catchTag("SaveError", (cause) =>
+        Store.set(error, cause.message),
+      ),
+    ),
+  ),
+);
+```
+
+## Handle Independently
+
+When every emission can run independently, use the built-in concurrency option.
+
+```ts
+const preload = yield* Event.make<string>().pipe(
+  Event.handler(
+    (url) => cacheImage(url),
+    { concurrency: "unbounded" },
+  ),
+);
+```
+
+Use this instead of writing a custom concurrent stream pipeline for ordinary
+action handling.
+
+## Publish Another Event
+
+An event handler can emit another event when the model wants to announce a
+result.
+
+```ts
+const saved = Event.make<Project>();
+
+const submit = yield* Event.make<ProjectDraft>().pipe(
+  Event.handler((draft) =>
     Effect.gen(function* () {
-      yield* Store.set(currentTarget, target);
-      yield* Event.emit(selected, target);
-      yield* Event.emit(committed, target);
+      const project = yield* createProject(draft);
+      yield* Event.emit(saved, project);
     }),
   ),
 );
 ```
 
-Keep async read/write state out of basic event examples. If a flow needs
-waiting, success, failure, retries, or visible async state, move that logic to
-`Resource` or `Mutation`.
+Expose `submit` when outside code may start the save. Expose `saved` when
+outside code may observe successful saves.
 
-## Registry Pipelines
+## Combine
 
-Use `Registry.run` when the logic is naturally stream-shaped: filtering,
-mapping, deduping, debouncing, merging, or wiring one event into another.
+`Event.combine` merges several events into one observable event.
 
 ```ts
-const textChanged = yield* Event.make<string>();
-const textCommitted = yield* Event.make<string>();
+const saved = Event.make<Project>();
+const removed = Event.make<ProjectId>();
 
-yield* Registry.run(
-  Event.stream(textChanged).pipe(
-    Stream.map((text) => text.trim()),
-    Stream.filter((text) => text.length > 0),
-    Stream.mapEffect((text) => Event.emit(textCommitted, text)),
-  ),
+const changed = Event.combine([saved, removed]);
+```
+
+Use a combined event when several actions should trigger the same follow-up
+logic.
+
+```ts
+yield* changed.pipe(
+  Event.handler(() => Event.emit(projects.refresh)),
 );
 ```
 
-This keeps the flow readable as a stream instead of hiding it inside a callback.
+## Awaiting Events
 
-## Connect Model Outputs
+Use `Event.waitFor(event)` when an Effect needs to block until the next event
+emission. Start the wait before the action that may emit the event.
 
-Parent models can connect child outputs to parent inputs or outputs through the
-same stream API.
-
-```ts
-const child = yield* Model.get(ChildModel, childKey);
-const childSubmitted = yield* Event.make<SubmitPayload>();
-
-yield* Registry.run(
-  Event.stream(child.outputs.submitted).pipe(
-    Stream.map((payload) => normalizeSubmitPayload(payload)),
-    Stream.mapEffect((payload) => Event.emit(childSubmitted, payload)),
-  ),
-);
-```
-
-This is model composition, not UI logic. The View still only receives declared
-`ui` ports.
+For ordinary model wiring, prefer `Event.handler`. For filtering, debouncing,
+merging, or longer pipelines, use [Streams and Registry Runs](./streams.md).

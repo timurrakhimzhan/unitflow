@@ -1,107 +1,107 @@
 :root {
-  --sl-color-accent-low: #d7ede5;
-  --sl-color-accent: #1d6f5f;
-  --sl-color-accent-high: #0e3f38;
-  --sl-color-white: #fbfaf6;
-  --sl-color-gray-1: #f4f2ea;
-  --sl-color-gray-2: #d9ded8;
-  --sl-color-gray-3: #a9b2ad;
-  --sl-color-gray-4: #737d78;
-  --sl-color-gray-5: #3f4844;
-  --sl-color-gray-6: #202723;
-  --sl-color-black: #141815;
+  --sl-color-accent-low: #4d1628;
+  --sl-color-accent: #ff5c82;
+  --sl-color-accent-high: #ffd4df;
+  --sl-color-white: #f7f8fb;
+  --sl-color-gray-1: #eef0f5;
+  --sl-color-gray-2: #cfd5e0;
+  --sl-color-gray-3: #9aa3b2;
+  --sl-color-gray-4: #687181;
+  --sl-color-gray-5: #3d4350;
+  --sl-color-gray-6: #20242c;
+  --sl-color-black: #101116;
 }
 
 :root[data-theme="light"] {
-  --sl-color-white: #161616;
-  --sl-color-black: #fbfaf6;
-  --sl-color-gray-1: #202723;
-  --sl-color-gray-2: #3f4844;
-  --sl-color-gray-3: #737d78;
-  --sl-color-gray-4: #a9b2ad;
-  --sl-color-gray-5: #d9ded8;
-  --sl-color-gray-6: #f4f2ea;
-  --sl-color-gray-7: #fbfaf6;
+  --sl-color-accent-low: #ffe0e8;
+  --sl-color-accent: #c92f55;
+  --sl-color-accent-high: #6d1530;
+  --sl-color-white: #181820;
+  --sl-color-black: #f7f8fb;
+  --sl-color-gray-1: #24242e;
+  --sl-color-gray-2: #464858;
+  --sl-color-gray-3: #6e7282;
+  --sl-color-gray-4: #a5abb9;
+  --sl-color-gray-5: #d8dce5;
+  --sl-color-gray-6: #eef0f5;
+  --sl-color-gray-7: #f7f8fb;
 }
 
 .hero img {
   filter: none;
 }
 
-.hero > .hero-html {
-  width: min(100%, 42rem);
+.site-title img {
+  height: 2.25rem;
+  width: auto;
 }
 
-.unitflow-hero-code {
-  width: 100%;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--sl-color-gray-5), transparent 24%);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--sl-color-black), var(--sl-color-gray-6) 28%);
-  box-shadow: 0 24px 70px color-mix(in srgb, var(--sl-color-black), transparent 68%);
-}
-
-.unitflow-code-tabs {
+/* The hero heading gets the mark inline, to its left, instead of the
+ * standalone graphic living apart from the wordmark. */
+.hero [data-page-title] {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.55rem 0.65rem 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--sl-color-gray-5), transparent 32%);
+  gap: 0.85rem;
 }
 
-.unitflow-code-tab {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2rem;
-  padding: 0 0.8rem;
-  border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: 7px 7px 0 0;
-  background: transparent;
-  color: var(--sl-color-gray-3);
-  cursor: pointer;
-  font: 600 0.8rem/1 var(--__sl-font-mono);
+.hero [data-page-title]::before {
+  content: "";
+  display: inline-block;
+  flex-shrink: 0;
+  width: clamp(2.5rem, 6vw, 3.75rem);
+  aspect-ratio: 176.67312622070312 / 136.37550354003906;
+  background: url("../assets/unitflow-logo.svg") center / contain no-repeat;
+  filter: drop-shadow(0 10px 22px color-mix(in srgb, var(--sl-color-black), transparent 74%));
 }
 
-.unitflow-code-tab-active {
-  border-color: color-mix(in srgb, var(--sl-color-gray-5), transparent 32%);
-  background: color-mix(in srgb, var(--sl-color-gray-6), transparent 32%);
+/* Vertical, centered hero at every width: cancel Starlight's desktop
+ * two-column split (there is no second column now that the hero has no
+ * image) and its accompanying left-alignment. */
+@media (min-width: 50rem) {
+  .hero {
+    grid-template-columns: 100%;
+  }
+
+  .hero .stack {
+    text-align: center;
+  }
+
+  .hero .copy {
+    align-items: center;
+  }
+
+  .hero .actions {
+    justify-content: center;
+  }
+}
+
+.unitflow-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.unitflow-card {
+  padding: 1.25rem 1.4rem;
+  border: 1px solid color-mix(in srgb, var(--sl-color-gray-5), transparent 40%);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sl-color-black), var(--sl-color-gray-6) 14%);
+}
+
+.unitflow-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: var(--sl-text-lg);
   color: var(--sl-color-white);
 }
 
-.unitflow-code-panel {
-  display: none;
+.unitflow-card p {
   margin: 0;
-  padding: 1rem 1.1rem 1.15rem;
-  overflow-x: auto;
-  color: var(--sl-color-gray-2);
-  font: 0.83rem/1.65 var(--__sl-font-mono);
+  font-size: var(--sl-text-sm);
+  line-height: 1.6;
+  color: var(--sl-color-gray-3);
 }
 
-.unitflow-code-panel code {
-  font: inherit;
-}
-
-.unitflow-code-panel-active {
-  display: block;
-}
-
-.unitflow-hero-code .uf-muted {
-  color: #7dd3c7;
-}
-
-.unitflow-hero-code .uf-keyword {
-  color: #f1c27d;
-}
-
-@media (min-width: 50rem) {
-  .hero {
-    grid-template-columns: minmax(18rem, 0.85fr) minmax(30rem, 1.15fr);
-  }
-}
-
-@media (max-width: 38rem) {
-  .unitflow-hero-code pre {
-    font-size: 0.74rem;
-  }
+.unitflow-card code {
+  font-size: 0.85em;
 }

@@ -54,8 +54,8 @@ export const BoardApp = View.make(BoardModel, (board) => (
       <div>
         <h1>Delivery Board</h1>
         <p>
-          {board.view.counts.todo} todo, {board.view.counts.doing} active,{" "}
-          {board.view.counts.done} done
+          {board.boardState.counts.todo} todo, {board.boardState.counts.doing} active,{" "}
+          {board.boardState.counts.done} done
         </p>
       </div>
 
@@ -77,7 +77,7 @@ export const BoardApp = View.make(BoardModel, (board) => (
       }}
     >
       <input
-        value={board.view.draft}
+        value={board.boardState.draft}
         placeholder="Task title"
         onChange={(event) => board.setDraft(event.currentTarget.value)}
       />
@@ -89,14 +89,16 @@ export const BoardApp = View.make(BoardModel, (board) => (
         <div className="column" key={status}>
           <h2>{status}</h2>
           <div className="task-list">
-            {board.taskUnits.map((task, index) => {
-              const snapshot = board.view.taskStates[index];
+            {board.taskUnits.map((task) => {
+              const snapshot = board.boardState.taskStates.find(
+                (state) => state.id === task.key.id,
+              );
               if (snapshot?.status !== status) return null;
               return (
                 <TaskCard
-                  key={snapshot.id}
+                  key={task.key.id}
                   unit={task}
-                  onRemove={() => board.remove(snapshot.id)}
+                  onRemove={() => board.remove(task.key.id)}
                 />
               );
             })}

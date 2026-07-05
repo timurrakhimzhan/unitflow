@@ -6,10 +6,10 @@ export class CounterModel extends Model.Service<CounterModel>()(
 )({
   make: () =>
     Effect.gen(function* () {
-      const count = Store.make(0, { name: "count" });
-      const step = Store.make(1, { name: "step" });
+      const count = Store.make(0);
+      const step = Store.make(1);
 
-      const increment = yield* Event.make<void>({ name: "increment" }).pipe(
+      const increment = yield* Event.make<void>().pipe(
         Event.handler(() =>
           Effect.gen(function* () {
             const amount = yield* Store.get(step);
@@ -18,7 +18,7 @@ export class CounterModel extends Model.Service<CounterModel>()(
         ),
       );
 
-      const decrement = yield* Event.make<void>({ name: "decrement" }).pipe(
+      const decrement = yield* Event.make<void>().pipe(
         Event.handler(() =>
           Effect.gen(function* () {
             const amount = yield* Store.get(step);
@@ -27,11 +27,11 @@ export class CounterModel extends Model.Service<CounterModel>()(
         ),
       );
 
-      const reset = yield* Event.make<void>({ name: "reset" }).pipe(
+      const reset = yield* Event.make<void>().pipe(
         Event.handler(() => Store.reset(count, step)),
       );
 
-      const view = Store.combine([count, step], (count, step) => ({
+      const counterState = Store.combine([count, step], (count, step) => ({
         count,
         step,
         doubled: count * 2,
@@ -42,8 +42,8 @@ export class CounterModel extends Model.Service<CounterModel>()(
         inputs: {},
         outputs: { count },
         ui: {
-          view,
-          setStep: Event.setter(step, { name: "setStep" }),
+          counterState,
+          setStep: Event.setter(step),
           increment,
           decrement,
           reset,

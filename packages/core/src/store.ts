@@ -1,7 +1,10 @@
-import type * as Cause from "effect/Cause";
+import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import { type Pipeable, pipeArguments } from "effect/Pipeable";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
@@ -10,14 +13,19 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { type Flatten, isFlatten, stateOf as flattenStateOf } from "./internals.js";
 import {
+  InstanceScope,
   ownerScope,
   Registry,
+  type RegistryService,
   releaseSubscription,
+  type SubscriptionTracker,
   trackedStream,
   trackPublish,
   trackSubscription,
 } from "./registry.js";
+import type * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import * as Event from "./event.js";
+import { makeSlot, type PersistOptions } from "./persistence.js";
 import { awaitFirst, evaluate, type WaitPredicate } from "./wait-for.js";
 
 const TypeId = Symbol.for("@unitflow/core/Store");
@@ -122,75 +130,284 @@ export const map =
   (source: Source<A>): Combined<B> =>
     combine([source], f, options);
 
-export const ref = Effect.fnUntraced(function* <A>(
+export const ref = <A>(
   store: Source<A> | Sink<A>,
-): Generator<Effect.Effect<unknown, never, Registry>, SubscriptionRef.SubscriptionRef<A>, never> {
+): Effect.Effect<SubscriptionRef.SubscriptionRef<A>, never, Registry> => {
   if (isCombined(store)) {
-    return yield* Effect.die(
+    return Effect.die(
       new Error("Unitflow combined stores are computed and have no backing ref."),
     );
   }
   if (isFlatten(store)) {
-    return yield* Effect.die(
+    return Effect.die(
       new Error("Unitflow flattened stores are computed and have no backing ref."),
     );
   }
-  const registry = yield* Registry;
+  return Effect.flatMap(Registry, (registry) => refFromRegistry(registry, store));
+};
+
+const refFromRegistry = <A>(
+  registry: RegistryService,
+  store: Source<A> | Sink<A>,
+): Effect.Effect<SubscriptionRef.SubscriptionRef<A>, never, Registry> => {
   const existing = registry.stores.get(store.id);
-  if (existing !== undefined) return existing;
+  if (existing !== undefined) return Effect.succeed(existing);
 
-  const owner = yield* ownerScope;
-  const subscriptionRef = yield* SubscriptionRef.make(store.initial);
-  registry.stores.set(store.id, subscriptionRef);
-  yield* Scope.addFinalizer(
-    owner,
-    Effect.suspend(() => {
-      registry.stores.delete(store.id);
-      return PubSub.shutdown(subscriptionRef.pubsub);
-    }),
+  return Effect.gen(function* () {
+    const instance = yield* Effect.serviceOption(InstanceScope);
+    const owner = Option.getOrElse(instance, () => registry.scope);
+    const subscriptionRef = yield* SubscriptionRef.make(store.initial);
+    registry.stores.set(store.id, subscriptionRef);
+    yield* Scope.addFinalizer(
+      owner,
+      Effect.suspend(() => {
+        registry.stores.delete(store.id);
+        closeStoreListeners(registry, store);
+        return PubSub.shutdown(subscriptionRef.pubsub);
+      }),
+    );
+    return subscriptionRef;
+  });
+};
+
+const setUnsafe = <A>(subscriptionRef: SubscriptionRef.SubscriptionRef<A>, value: A): void => {
+  subscriptionRef.value = value;
+  PubSub.publishUnsafe(subscriptionRef.pubsub, value);
+};
+
+/** Sentinel for the synchronous evaluator: some backing ref has not been
+ * materialized yet, so the caller must take the effectful path (which creates
+ * refs with their scope finalizers). */
+const Unresolved = Symbol.for("@unitflow/core/Store/Unresolved");
+
+/**
+ * Whether the ref's write semaphore has a free permit right now. Effect's v4
+ * `SemaphoreImpl` exposes `free`, but the public `Semaphore` type does not —
+ * read it defensively: anything unexpected reports contention, which only
+ * means taking the equivalent `withPermit` path.
+ */
+const uncontended = (subscriptionRef: SubscriptionRef.SubscriptionRef<any>): boolean => {
+  const free: unknown = Reflect.get(subscriptionRef.semaphore, "free");
+  return typeof free === "number" && free >= 1;
+};
+
+/**
+ * Evaluates a source synchronously against already-materialized refs.
+ * Combined values are memoized per call, so a shared node computes once per
+ * pull — O(nodes), where the effectful recursion was O(paths). Returns
+ * {@link Unresolved} when any needed plain ref is missing.
+ */
+const evalSync = (
+  registry: RegistryService,
+  store: Source<any>,
+  memo: Map<string, unknown> | undefined,
+): unknown => {
+  if (isCombined(store)) {
+    if (memo !== undefined && memo.has(store.id)) return memo.get(store.id);
+    const { compute, sources } = store[CombinedTypeId];
+    const values = new Array<unknown>(sources.length);
+    let index = 0;
+    for (const source of sources) {
+      const value = evalSync(registry, source, memo);
+      if (value === Unresolved) return Unresolved;
+      values[index++] = value;
+    }
+    const result = compute(...values);
+    memo?.set(store.id, result);
+    return result;
+  }
+  if (isFlatten(store)) {
+    const { pick, source } = flattenStateOf(store);
+    const items = evalSync(registry, source, memo);
+    if (items === Unresolved) return Unresolved;
+    const results: Array<unknown> = [];
+    // eslint-disable-next-line revizo/no-type-assertion
+    for (const item of items as ReadonlyArray<unknown>) {
+      const value = evalSync(registry, pick(item), memo);
+      if (value === Unresolved) return Unresolved;
+      results.push(value);
+    }
+    return results;
+  }
+  const subscriptionRef = registry.stores.get(store.id);
+  return subscriptionRef === undefined ? Unresolved : SubscriptionRef.getUnsafe(subscriptionRef);
+};
+
+interface StoreStreamListener<A = unknown> {
+  readonly offer: (value: A) => void;
+  readonly close: () => void;
+}
+
+const storeStreamListeners = new WeakMap<
+  RegistryService,
+  Map<string, Set<StoreStreamListener<any>>>
+>();
+
+const listenersFor = (
+  registry: RegistryService,
+): Map<string, Set<StoreStreamListener<any>>> => {
+  let listeners = storeStreamListeners.get(registry);
+  if (listeners === undefined) {
+    listeners = new Map();
+    storeStreamListeners.set(registry, listeners);
+  }
+  return listeners;
+};
+
+const offerStoreListeners = <A>(registry: RegistryService, store: Sink<A>, value: A): void => {
+  const listeners = storeStreamListeners.get(registry)?.get(store.id);
+  if (listeners === undefined || listeners.size === 0) return;
+  for (const listener of listeners) listener.offer(value);
+};
+
+const closeStoreListeners = (registry: RegistryService, store: Sink<any> | Source<any>): void => {
+  const byStore = storeStreamListeners.get(registry);
+  const listeners = byStore?.get(store.id);
+  if (listeners === undefined) return;
+  byStore?.delete(store.id);
+  for (const listener of listeners) listener.close();
+};
+
+const completeStoreOutstanding = (
+  registry: RegistryService,
+  tracker: SubscriptionTracker,
+): void => {
+  if (tracker.outstanding === 0) return;
+  while (tracker.outstanding > 0) {
+    tracker.outstanding -= 1;
+    if (tracker.uncounted > 0) {
+      tracker.uncounted -= 1;
+    } else if (tracker.count > 0) {
+      tracker.count -= 1;
+      registry.settle.pending -= 1;
+    }
+  }
+  if (registry.settle.pending !== 0 || registry.settle.waiters.size === 0) return;
+  const waiters = [...registry.settle.waiters];
+  registry.settle.waiters.clear();
+  for (const waiter of waiters) {
+    Deferred.doneUnsafe(waiter, Effect.void);
+  }
+};
+
+/** The full write in one synchronous critical section: the settle count lands
+ * before the publish wakes a subscriber (see `trackedModify`). */
+const writeUnsafe = <A>(
+  registry: RegistryService,
+  subscriptionRef: SubscriptionRef.SubscriptionRef<A>,
+  store: Sink<A>,
+  value: A,
+): void => {
+  trackPublish(registry, store.id);
+  setUnsafe(subscriptionRef, value);
+  offerStoreListeners(registry, store, value);
+};
+
+const trackedSetSlow = <A>(
+  store: Sink<A>,
+  value: A,
+): Effect.Effect<void, never, Registry> =>
+  Effect.flatMap(Registry, (registry) =>
+    Effect.flatMap(refFromRegistry(registry, store), (subscriptionRef) =>
+      subscriptionRef.semaphore.withPermit(
+        Effect.sync(() => writeUnsafe(registry, subscriptionRef, store, value)),
+      ),
+    ),
   );
-  return subscriptionRef;
-});
 
-export const get = <A>(store: Source<A>): Effect.Effect<A, never, Registry> => {
+/**
+ * The hot write path: with the ref materialized and its semaphore free, the
+ * whole critical section runs synchronously inside one `withFiber` — nothing
+ * can interleave within a synchronous block, so this is exactly `withPermit`
+ * minus the bookkeeping. A missing ref or a held permit (an effectful
+ * `SubscriptionRef` update in flight) falls back to the effectful path.
+ */
+const trackedSet = <A>(store: Sink<A>, value: A): Effect.Effect<void, never, Registry> =>
+  Effect.withFiber((fiber) => {
+    const registry = Context.getOrUndefined(fiber.context, Registry);
+    if (registry !== undefined) {
+      const subscriptionRef = registry.stores.get(store.id);
+      if (subscriptionRef !== undefined && uncontended(subscriptionRef)) {
+        writeUnsafe(registry, subscriptionRef, store, value);
+        return Effect.void;
+      }
+    }
+    return trackedSetSlow(store, value);
+  });
+
+/** The effectful pull path: materializes any missing refs (with their scope
+ * finalizers) while resolving. Only taken when {@link evalSync} bailed. */
+const getSlow = <A>(store: Source<A>): Effect.Effect<A, never, Registry> => {
   if (isCombined(store)) {
     const { compute, sources } = store[CombinedTypeId];
     return Effect.map(Effect.forEach(sources, get), (values) => compute(...values));
   }
   if (isFlatten(store)) {
     const { pick, source } = flattenStateOf(store);
-    // The synchronous pull path: resolve the outer composition, then every
-    // picked inner source, all through the registry.
+    // Resolve the outer composition, then every picked inner source, all
+    // through the registry.
     const resolved: Effect.Effect<any, never, Registry> = Effect.flatMap(get(source), (items) =>
       Effect.forEach(items, (item) => get(pick(item))),
     );
     return resolved;
   }
-  return Effect.flatMap(ref(store), SubscriptionRef.get);
+  return Effect.map(ref(store), SubscriptionRef.getUnsafe);
 };
 
-/** Runs a `SubscriptionRef` write with the publish counted first, atomically
- * from the accounting's point of view: the count lands before the publish can
- * wake a subscriber, and interruption cannot split the pair. */
-const trackedWrite = <A>(
+export const get = <A>(store: Source<A>): Effect.Effect<A, never, Registry> =>
+  Effect.withFiber((fiber) => {
+    const registry = Context.getOrUndefined(fiber.context, Registry);
+    if (registry !== undefined) {
+      // Only a graph pull benefits from the memo table; a plain store read
+      // has nothing to share.
+      const memo = isCombined(store) || isFlatten(store) ? new Map<string, unknown>() : undefined;
+      const value = evalSync(registry, store, memo);
+      // eslint-disable-next-line revizo/no-type-assertion
+      if (value !== Unresolved) return Effect.succeed(value as A);
+    }
+    return getSlow(store);
+  });
+
+const trackedModifySlow = <A, B>(
   store: Sink<A>,
-  write: (subscriptionRef: SubscriptionRef.SubscriptionRef<A>) => Effect.Effect<A>,
-): Effect.Effect<A, never, Registry> =>
-  Effect.gen(function* () {
-    const registry = yield* Registry;
-    const subscriptionRef = yield* ref(store);
-    return yield* Effect.uninterruptible(
-      Effect.suspend(() => {
-        trackPublish(registry, store.id);
-        return write(subscriptionRef);
-      }),
-    );
+  f: (value: A) => readonly [B, A],
+): Effect.Effect<B, never, Registry> =>
+  Effect.flatMap(Registry, (registry) =>
+    Effect.flatMap(refFromRegistry(registry, store), (subscriptionRef) =>
+      subscriptionRef.semaphore.withPermit(
+        Effect.sync(() => {
+          const [result, value] = f(SubscriptionRef.getUnsafe(subscriptionRef));
+          writeUnsafe(registry, subscriptionRef, store, value);
+          return result;
+        }),
+      ),
+    ),
+  );
+
+/** Runs a `SubscriptionRef` read-modify-write with settle accounting and
+ * publication in one synchronous critical section: the count lands before
+ * publish wakes a subscriber, and the semaphore keeps direct `ref` users
+ * serialized. Fast path mirrors {@link trackedSet}; a throwing `f` dies just
+ * like it would inside `Effect.sync`. */
+const trackedModify = <A, B>(
+  store: Sink<A>,
+  f: (value: A) => readonly [B, A],
+): Effect.Effect<B, never, Registry> =>
+  Effect.withFiber((fiber) => {
+    const registry = Context.getOrUndefined(fiber.context, Registry);
+    if (registry !== undefined) {
+      const subscriptionRef = registry.stores.get(store.id);
+      if (subscriptionRef !== undefined && uncontended(subscriptionRef)) {
+        const [result, value] = f(SubscriptionRef.getUnsafe(subscriptionRef));
+        writeUnsafe(registry, subscriptionRef, store, value);
+        return Effect.succeed(result);
+      }
+    }
+    return trackedModifySlow(store, f);
   });
 
 export const set = <A>(store: Sink<A>, value: A): Effect.Effect<void, never, Registry> =>
-  Effect.asVoid(
-    trackedWrite(store, (subscriptionRef) => SubscriptionRef.setAndGet(subscriptionRef, value)),
-  );
+  trackedSet(store, value);
 
 /** Sets every given store back to its initial value, in argument order. */
 export const reset = (...stores: ReadonlyArray<Sink<any>>): Effect.Effect<void, never, Registry> =>
@@ -202,9 +419,7 @@ export const update = <A>(
   store: Store<A>,
   f: (value: A) => A,
 ): Effect.Effect<void, never, Registry> =>
-  Effect.asVoid(
-    trackedWrite(store, (subscriptionRef) => SubscriptionRef.updateAndGet(subscriptionRef, f)),
-  );
+  Effect.asVoid(trackedModify(store, (value) => [undefined, f(value)]));
 
 /** Reads the current value, so it requires the full store — a model updates
  * only its own state. */
@@ -212,16 +427,7 @@ export const modify = <A, B>(
   store: Store<A>,
   f: (value: A) => readonly [B, A],
 ): Effect.Effect<B, never, Registry> =>
-  Effect.gen(function* () {
-    const registry = yield* Registry;
-    const subscriptionRef = yield* ref(store);
-    return yield* Effect.uninterruptible(
-      Effect.suspend(() => {
-        trackPublish(registry, store.id);
-        return SubscriptionRef.modify(subscriptionRef, f);
-      }),
-    );
-  });
+  trackedModify(store, f);
 
 let nextFlattenSubscription = 0;
 
@@ -283,13 +489,45 @@ const flattenStream = (store: Flatten<any>): Stream.Stream<any, never, Registry>
           { startImmediately: true },
         );
 
-      let innerScope: Scope.Closeable | undefined;
+      // Incremental composition tracking: one closeable scope per watched
+      // occurrence, keyed by the picked source's id (an array keeps duplicate
+      // picks at their exact multiplicity). A composition change only closes
+      // watchers of removed occurrences and forks watchers for added ones —
+      // an unchanged item's subscription is never interrupted, so a change
+      // costs O(delta), not O(items).
+      const watched = new Map<string, { source: Source<any>; scopes: Array<Scope.Closeable> }>();
       const resubscribe = Effect.gen(function* () {
-        if (innerScope !== undefined) yield* Scope.close(innerScope, Exit.void);
-        const forked = Scope.forkUnsafe(scope);
-        innerScope = forked;
+        const targets = new Map<string, { source: Source<any>; count: number }>();
         for (const item of yield* get(source)) {
-          yield* watch(pick(item), forked);
+          const picked = pick(item);
+          const target = targets.get(picked.id);
+          if (target === undefined) {
+            targets.set(picked.id, { source: picked, count: 1 });
+          } else {
+            target.count += 1;
+          }
+        }
+        // Removed occurrences close first — a removed item's store must never
+        // re-emit into the snapshot, exactly like the full-resubscribe did.
+        for (const [id, entry] of watched) {
+          const keep = targets.get(id)?.count ?? 0;
+          while (entry.scopes.length > keep) {
+            const closeable = entry.scopes.pop();
+            if (closeable !== undefined) yield* Scope.close(closeable, Exit.void);
+          }
+          if (entry.scopes.length === 0) watched.delete(id);
+        }
+        for (const [id, target] of targets) {
+          let entry = watched.get(id);
+          if (entry === undefined) {
+            entry = { source: target.source, scopes: [] };
+            watched.set(id, entry);
+          }
+          while (entry.scopes.length < target.count) {
+            const forked = Scope.forkUnsafe(scope);
+            entry.scopes.push(forked);
+            yield* watch(target.source, forked);
+          }
         }
         yield* recompute;
       });
@@ -314,32 +552,112 @@ const flattenStream = (store: Flatten<any>): Stream.Stream<any, never, Registry>
     }),
   );
 
+const storeStream = <A>(store: Source<A>): Stream.Stream<A, never, Registry> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const registry = yield* Registry;
+      const subscriptionRef = yield* refFromRegistry(registry, store);
+      const scope = yield* Effect.scope;
+      const tracker = trackSubscription(registry, store.id, 1);
+      let queue: Array<A> = [SubscriptionRef.getUnsafe(subscriptionRef)];
+      let waiter: Deferred.Deferred<void> | undefined;
+      let closed = false;
+      const listener: StoreStreamListener<A> = {
+        offer(value) {
+          if (closed) return;
+          queue.push(value);
+          if (waiter !== undefined) {
+            const deferred = waiter;
+            waiter = undefined;
+            Deferred.doneUnsafe(deferred, Effect.void);
+          }
+        },
+        close() {
+          if (closed) return;
+          closed = true;
+          queue = [];
+          if (waiter !== undefined) {
+            const deferred = waiter;
+            waiter = undefined;
+            Deferred.doneUnsafe(deferred, Effect.void);
+          }
+        },
+      };
+
+      const listenersByStore = listenersFor(registry);
+      const listeners = listenersByStore.get(store.id);
+      if (listeners === undefined) {
+        listenersByStore.set(store.id, new Set([listener]));
+      } else {
+        listeners.add(listener);
+      }
+
+      yield* Scope.addFinalizer(
+        scope,
+        Effect.sync(() => {
+          closed = true;
+          const listenersByStore = storeStreamListeners.get(registry);
+          const listeners = listenersByStore?.get(store.id);
+          if (listeners !== undefined) {
+            listeners.delete(listener);
+            if (listeners.size === 0) listenersByStore?.delete(store.id);
+          }
+          releaseSubscription(registry, store.id, tracker);
+        }),
+      );
+
+      const pull = Effect.suspend(() => {
+        completeStoreOutstanding(registry, tracker);
+        if (queue.length > 0) {
+          const items = queue;
+          queue = [];
+          tracker.outstanding = items.length;
+          // eslint-disable-next-line revizo/no-type-assertion
+          return Effect.succeed(items as unknown as readonly [A, ...Array<A>]);
+        }
+        if (closed) return Cause.done();
+        const deferred = Deferred.makeUnsafe<void>();
+        waiter = deferred;
+        return Deferred.await(deferred).pipe(
+          Effect.flatMap(() => {
+            if (closed && queue.length === 0) return Cause.done();
+            if (queue.length === 0) return Cause.done();
+            const items = queue;
+            queue = [];
+            tracker.outstanding = items.length;
+            // eslint-disable-next-line revizo/no-type-assertion
+            return Effect.succeed(items as unknown as readonly [A, ...Array<A>]);
+          }),
+          Effect.onInterrupt(() => {
+            if (waiter === deferred) waiter = undefined;
+            return Cause.done();
+          }),
+        );
+      });
+
+      return Stream.fromPull(Effect.succeed(pull));
+    }),
+  );
+
 export const stream = <A>(store: Source<A>): Stream.Stream<A, never, Registry> => {
   if (isFlatten(store)) return flattenStream(store);
   if (isCombined(store)) {
-    const { compute, sources } = store[CombinedTypeId];
-    return Stream.zipLatestAll(...sources.map(stream)).pipe(
-      Stream.map((values) => compute(...values)),
+    const sources = uniqueSources(watchSources(store));
+    if (sources.length === 0) return Stream.make(store.initial);
+    // One deduped watch source needs no zip layer: `zipLatestAll` over a
+    // single stream emits exactly once per source emission anyway, so recombine
+    // directly and skip its coordination fiber.
+    const [only] = sources;
+    const emissions =
+      sources.length === 1 && only !== undefined
+        ? stream(only)
+        : Stream.zipLatestAll(...sources.map(stream));
+    return emissions.pipe(
+      Stream.mapEffect(() => get(store)),
       Stream.changes,
     );
   }
-  return Stream.unwrap(
-    Effect.gen(function* () {
-      const registry = yield* Registry;
-      const subscriptionRef = yield* ref(store);
-      const scope = yield* Effect.scope;
-      // Subscribe first, register right after (see the event twin). The ref's
-      // pubsub replays exactly one item — the current value — and it was
-      // never counted, so it must not decrement on completion.
-      const subscription = yield* PubSub.subscribe(subscriptionRef.pubsub);
-      const tracker = trackSubscription(registry, store.id, 1);
-      yield* Scope.addFinalizer(
-        scope,
-        Effect.sync(() => releaseSubscription(registry, store.id, tracker)),
-      );
-      return trackedStream(registry, subscription, tracker);
-    }),
-  );
+  return storeStream(store);
 };
 
 const watchSources = (source: Source<any>): ReadonlyArray<Source<any>> =>
@@ -364,24 +682,81 @@ export const changed = <A>(
           ? undefined
           : { name: `${store.name}.changed` },
     );
-    let current = yield* get(store);
-    const emitIfChanged = Effect.flatMap(get(store), (value) =>
-      Effect.suspend(() => {
-        if (Object.is(value, current)) return Effect.void;
-        current = value;
-        return Event.emit(changedEvent, value);
-      }),
-    );
-    yield* Effect.forEach(
-      uniqueSources(watchSources(store)),
-      (source) =>
-        Registry.run(
-          stream(source).pipe(
-            Stream.drop(1),
-            Stream.mapEffect(() => emitIfChanged),
+    const sources = uniqueSources(watchSources(store));
+
+    // Flattened sources need the two-level stream watcher; everything else
+    // takes the fused path below: a synchronous store listener recomputes,
+    // dedupes, and dispatches into the event — no watcher pipeline at all.
+    if (sources.some(isFlatten)) {
+      let current = yield* get(store);
+      const emitIfChanged = Effect.flatMap(get(store), (value) =>
+        Effect.suspend(() => {
+          if (Object.is(value, current)) return Effect.void;
+          current = value;
+          return Event.emit(changedEvent, value);
+        }),
+      );
+      yield* Effect.forEach(
+        sources,
+        (source) =>
+          Registry.run(
+            stream(source).pipe(
+              Stream.drop(1),
+              Stream.mapEffect(() => emitIfChanged),
+            ),
           ),
-        ),
-      { discard: true },
+        { discard: true },
+      );
+      return changedEvent;
+    }
+
+    const registry = yield* Registry;
+    const scope = yield* ownerScope;
+    // The event channel binds to the declaring scope now — the same owner the
+    // watcher pipeline's subscription would have bound it to.
+    const channel = yield* Event.pubsub(changedEvent);
+    // Materialize every watched ref, so the sync evaluator always resolves.
+    yield* Effect.forEach(sources, ref, { discard: true });
+    let current: unknown = yield* get(store);
+    const needsMemo = isCombined(store);
+    let closed = false;
+    // Reads at dispatch time (not the offered value): a recomputation always
+    // reflects the latest source values, exactly like the watcher's `get`.
+    const listener: StoreStreamListener<unknown> = {
+      offer() {
+        if (closed) return;
+        const value = evalSync(registry, store, needsMemo ? new Map() : undefined);
+        if (value === Unresolved || Object.is(value, current)) return;
+        current = value;
+        // The evaluator returns this source's value type.
+        // eslint-disable-next-line revizo/no-type-assertion
+        Event.dispatchUnsafe(registry, channel, changedEvent.id, value as A);
+      },
+      close() {
+        closed = true;
+      },
+    };
+    const listenersByStore = listenersFor(registry);
+    for (const source of sources) {
+      const listeners = listenersByStore.get(source.id);
+      if (listeners === undefined) {
+        listenersByStore.set(source.id, new Set([listener]));
+      } else {
+        listeners.add(listener);
+      }
+    }
+    yield* Scope.addFinalizer(
+      scope,
+      Effect.sync(() => {
+        closed = true;
+        const byStore = storeStreamListeners.get(registry);
+        for (const source of sources) {
+          const listeners = byStore?.get(source.id);
+          if (listeners === undefined) continue;
+          listeners.delete(listener);
+          if (listeners.size === 0) byStore?.delete(source.id);
+        }
+      }),
     );
     return changedEvent;
   });
@@ -475,3 +850,35 @@ export function waitFor(
     options?.timeout,
   );
 }
+
+/**
+ * Persists every change of the store into a `KeyValueStore` under `key`, and
+ * hydrates the store from the stored copy inline: by the time `persist`
+ * returns, the store already holds the restored value, so anything built on
+ * top of it afterwards (a dependent query, a combined store) sees the
+ * restored value from its first run. Best-effort: storage and codec failures
+ * are logged as warnings and never affect the store itself. A stored entry
+ * that fails to decode — or is older than `timeToLive` — is a miss, leaving
+ * the initial value in place.
+ */
+export const persist =
+  <A, I>(options: PersistOptions<A, I>) =>
+  (self: Store<A>): Effect.Effect<Store<A>, never, KeyValueStore.KeyValueStore | Registry> =>
+    Effect.gen(function* () {
+      const slot = yield* makeSlot(options);
+
+      const restored = yield* slot.load;
+      if (Option.isSome(restored)) yield* set(self, restored.value);
+
+      // The subscription starts after hydration, and the replayed current
+      // value is dropped, so the restored value is not echoed back into the
+      // KVS: only future changes are saved.
+      yield* Registry.run(
+        stream(self).pipe(
+          Stream.drop(1),
+          Stream.mapEffect((value) => slot.save(value)),
+        ),
+      );
+
+      return self;
+    });

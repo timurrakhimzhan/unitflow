@@ -1,47 +1,34 @@
 # React Binding
 
-React is a binding layer, not the owner of model logic.
+React binds model `ui`; it does not own model logic.
 
 ```tsx
-export const ProjectPicker = View.make(ProjectPickerModel, (units) => {
-  const view = units.view;
+const runtime = UnitflowRuntime.make(AppModel.layer);
 
-  return (
-    <Menu
-      open={view.open}
-      onOpenChange={units.setOpen}
-      onSelect={(target) => units.selectTarget(target)}
-    />
-  );
-});
+createRoot(root).render(
+  <Unitflow runtime={runtime} rootModel={AppModel}>
+    {(app) => <AppView unit={app} />}
+  </Unitflow>,
+);
 ```
 
-Views receive only `ui` ports:
+`Unitflow` provides the runtime and leases the root model (`building` /
+`failed` render its construction states). Views never resolve models: the
+root unit comes from `Unitflow`, every other unit from its parent model's
+`ui` — JSX cannot summon an instance.
 
-- Store sources become current values.
-- Event sinks become callbacks.
-- Nested unit ports stay as ports and are passed to child Views.
-
-## Resolving Units
-
-Resolve by key:
+Create Views with `View.make`; every View takes exactly one wiring prop,
+`unit`.
 
 ```tsx
-<ProjectPicker unitKey={{ scope: "ifc" }} />
+export const CounterView = View.make(CounterModel, ({ count, increment }) => (
+  <button type="button" onClick={() => increment()}>
+    {count}
+  </button>
+));
+
+<TaskView unit={task} />
 ```
 
-Or render ports a parent model already holds:
-
-```tsx
-<ProjectPicker unit={units.projectPicker} />
-```
-
-## View Rules
-
-- Do not read `inputs` or `outputs` in JSX.
-- Do not derive business state in JSX.
-- Do not use `useState` / `useEffect` in model-backed Views.
-- Publish a ready `view` store if rendering needs branches or computed values.
-
-Imperative canvas/3D leaves may own refs and local lifecycle, but should report
-domain facts back through model events.
+Do not read `inputs` or `outputs` in JSX. Publish a domain-named store if the
+UI needs derived state.

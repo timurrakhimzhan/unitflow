@@ -39,7 +39,10 @@ from the model instead of computing in the component.
 
 ## Async
 
-- Read RPC: `Resource.make(...)`.
+- Read RPC: `Query.make(...)`.
+- Paginated read: `Query.makeInfinite({ initialCursor, handler })` — the
+  handler returns `{ data, next: Option<Cursor> }`, the query gains
+  `loadMore` / `hasMore`.
 - Write RPC with visible lifecycle: `Mutation.make(...)`.
 - Streaming RPC: `Registry.run(stream.pipe(...))` and write progress to stores.
 - Failures become data in stores; long-running pipelines should not fail the

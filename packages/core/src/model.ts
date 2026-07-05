@@ -44,7 +44,12 @@ export interface UnitPorts {
  * the View fires them exactly like events. Store sinks stay rejected
  * everywhere but `inputs`.
  *
- * Beyond the required three, a shape may carry any number of EXTRA sections
+ * `ui` is optional: a headless model — a service other models resolve — has
+ * no View surface and returns only `inputs`/`outputs`. `View.make` requires a
+ * {@link Viewable} model, so binding a headless model to a View fails to
+ * compile.
+ *
+ * Beyond the base sections, a shape may carry any number of EXTRA sections
  * (named by audience, e.g. `analytics`): read-only observation surfaces held
  * to the same rule as `outputs` (see {@link Sections}) and invisible to the
  * View — only other models resolving the unit see them.
@@ -52,7 +57,7 @@ export interface UnitPorts {
 export interface Shape {
   readonly inputs: Record<string, SinkPort>;
   readonly outputs: Record<string, SourcePort>;
-  readonly ui: Record<string, SourcePort | Event.Sink<any> | UnitPorts>;
+  readonly ui?: Record<string, SourcePort | Event.Sink<any> | UnitPorts>;
 }
 
 /**
@@ -91,8 +96,8 @@ type KeyPrimitive = string | number | boolean;
 
 /**
  * Validates a key wherever one enters the system — `Model.get`/`dispose` (via
- * {@link KeyArgs}), a {@link List}'s `push`/`insert`/`get`/`remove`, and a
- * View's `unitKey` prop: a primitive, an already-`Equal` key object (or a
+ * {@link KeyArgs}) and a {@link List}'s `push`/`insert`/`get`/`remove`: a
+ * primitive, an already-`Equal` key object (or a
  * `Data.Class` instance — `Pipeable` is its v4 type-level marker), or a FLAT
  * record of primitives (tagged-enum members qualify). Anything else — notably
  * a record with a nested object field — collapses to `never`, so the call
@@ -132,6 +137,17 @@ export interface ServiceClass<
 export type AnyService = Context.Service<any, any> & {
   readonly modelKey: string;
   readonly modelType: Type<any, Shape, any, any>;
+};
+
+/** A {@link Shape} whose `ui` section is present: what a View can bind. */
+export interface ViewableShape extends Shape {
+  readonly ui: Record<string, SourcePort | Event.Sink<any> | UnitPorts>;
+}
+
+/** A model whose shape exposes a `ui` section — the bound `View.make`
+ * requires. Headless models (`inputs`/`outputs` only) do not satisfy it. */
+export type Viewable = AnyService & {
+  readonly modelType: Type<any, ViewableShape, any, any>;
 };
 
 type AnyEffect = Effect.Effect<Shape, unknown, unknown>;
@@ -256,6 +272,10 @@ export type Ports<A extends Shape> = {
 };
 
 export type PortsOf<M extends AnyService> = Ports<ShapeOf<M>>;
+
+export type ListItem<M extends AnyService> = PortsOf<M> & {
+  readonly key: KeyInput<KeyOf<M>>;
+};
 
 const typeWitness = <A>(): A => {
   throw new Error("Unitflow type witness should never be called.");
@@ -494,14 +514,14 @@ export const dispose = <M extends AnyService>(
 
 /** A dynamic owned collection of keyed child model instances — see {@link list}. */
 export interface List<M extends AnyService> {
-  /** The children's public ports, in list order. */
-  readonly items: Store.Source<ReadonlyArray<PortsOf<M>>>;
+  /** The children's public ports, paired with their list keys, in list order. */
+  readonly items: Store.Source<ReadonlyArray<ListItem<M>>>;
   /** One inner store picked per child, collapsed into ONE store whose value
    * is the array of their current values: recomputes and re-subscribes when
    * the composition changes, re-emits when any picked store changes, and
    * never re-emits for a removed child's stores. An empty list is `[]`. */
   readonly select: <A>(
-    pick: (ports: PortsOf<M>) => Store.Source<A>,
+    pick: (item: ListItem<M>) => Store.Source<A>,
   ) => Store.Source<ReadonlyArray<A>>;
   /** Look up an existing child by key. */
   readonly get: (
@@ -526,6 +546,7 @@ export interface List<M extends AnyService> {
 interface ListEntry<M extends AnyService> {
   readonly key: KeyInput<KeyOf<M>>;
   readonly ports: PortsOf<M>;
+  readonly item: ListItem<M>;
   /** The child's lease sub-scope, forked from the list's instance scope:
    * closing it releases this list's ownership of the child. */
   readonly scope: Scope.Closeable;
@@ -557,7 +578,7 @@ export const list = <M extends AnyService>(
     const registry = yield* Registry;
     const instanceScope = yield* InstanceScope;
 
-    const items = Store.make<ReadonlyArray<PortsOf<M>>>([]);
+    const items = Store.make<ReadonlyArray<ListItem<M>>>([]);
     // The backing ref must belong to the parent instance even when no port
     // republishes `items` — materialize it while the instance scope is in
     // context.
@@ -603,7 +624,12 @@ export const list = <M extends AnyService>(
                 ErrorOf<M>
               >,
           ),
-          Effect.map((ports): ListEntry<M> => ({ key, ports, scope })),
+          Effect.map((ports): ListEntry<M> => ({
+            key,
+            ports,
+            item: { ...ports, key },
+            scope,
+          })),
           // A failed construction releases the sub-scope so nothing dangles
           // off the instance scope (the accessor already invalidated the
           // entry before failing).
@@ -614,7 +640,7 @@ export const list = <M extends AnyService>(
     const publish = (): Effect.Effect<void, never, Registry> =>
       Store.set(
         items,
-        entries.map((entry) => entry.ports),
+        entries.map((entry) => entry.item),
       );
 
     const insertAt = (
@@ -683,7 +709,7 @@ export const list = <M extends AnyService>(
 
     return {
       items,
-      select: <A>(pick: (ports: PortsOf<M>) => Store.Source<A>): Store.Source<ReadonlyArray<A>> =>
+      select: <A>(pick: (item: ListItem<M>) => Store.Source<A>): Store.Source<ReadonlyArray<A>> =>
         Flatten.make(items, pick),
       get: (key: KeyInput<KeyOf<M>>) =>
         Effect.sync(() => Option.map(MutableHashMap.get(byKey, key), (entry) => entry.ports)),

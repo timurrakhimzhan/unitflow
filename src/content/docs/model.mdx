@@ -1,0 +1,430 @@
+---
+title: Model
+description: UI-facing Effect services, public sections, dependencies, keys, and child models.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+A Unitflow model is a UI-facing Effect service.
+
+It describes one coherent piece of UI behavior: a screen, panel, form, card,
+row, dialog, or dynamically created item. The model owns durable state,
+actions, async work, child models, and lifecycle. Because it is an Effect
+service, it lives in the same dependency graph as API clients, KeyValueStore,
+configuration, clocks, schedulers, and other services.
+
+That is the point of Unitflow's dependency injection: UI behavior can depend on
+Effect services and on other UI models, and tests can replace either one with
+a small fake layer.
+
+## Contract
+
+A model returns a public shape.
+
+```ts
+return {
+  inputs: {},
+  outputs: {},
+  ui: {},
+};
+```
+
+Those sections decide how other code may use the model.
+
+```txt
+inputs   -> write-only actions for parents, routes, persistence, and tests
+outputs  -> read-only state or events for parents, tests, and observers
+ui       -> render surface for a View (optional)
+```
+
+`ui` is optional: a headless model — a service other models resolve, with no
+screen of its own — returns only `inputs`/`outputs`. `View.make` accepts only
+models with a `ui` section (`Model.Viewable`), so binding a headless model to
+a View fails to compile.
+
+`inputs` can be triggered, but not observed. Put actions here when outside code
+may tell the model to do something.
+
+```ts
+inputs: {
+  setQuery,
+  submit,
+}
+```
+
+`outputs` can be read or subscribed to, but not written. Put values here when
+parent models, tests, analytics, or persistence code may observe them.
+
+```ts
+outputs: {
+  selectedProject,
+  results,
+}
+```
+
+`ui` is what a View receives. Stores become current values, events become
+functions, and child models become units passed to child Views.
+
+```ts
+ui: {
+  searchState,
+  setQuery,
+  submit,
+  picker,
+}
+```
+
+You can add extra read-only sections for a specific audience.
+
+```ts
+return {
+  inputs: { submit },
+  outputs: { result },
+  ui: { formState, setName, submit },
+  analytics: { submitted },
+  debug: { status },
+};
+```
+
+Extra sections are available through `Model.get(...)` and hidden from
+`View.make(...)`. They follow the same read-only rule as `outputs`.
+
+## Define a Model
+
+```ts
+import * as Effect from "effect/Effect";
+import { Event, Model, Store } from "@unitflow/core";
+
+export class CounterModel extends Model.Service<CounterModel>()(
+  "docs/counter",
+)({
+  make: Effect.gen(function* () {
+    const count = Store.make(0);
+
+    const increment = yield* Event.make<number>().pipe(
+      Event.handler((amount) =>
+        Store.update(count, (value) => value + amount),
+      ),
+    );
+
+    return {
+      inputs: { increment },
+      outputs: { count },
+      ui: {
+        count,
+        onIncrement: increment,
+      },
+    };
+  }),
+}) {}
+```
+
+The class has a `.layer`, so it composes like any other Effect service.
+
+```ts
+import * as Layer from "effect/Layer";
+import { Registry } from "@unitflow/core";
+
+const layer = CounterModel.layer.pipe(
+  Layer.provideMerge(Registry.layer),
+);
+```
+
+## Dependencies
+
+Inside `make`, use normal Effect services with `yield* Service`.
+
+```ts
+const api = yield* ProjectApi;
+```
+
+Use `Model.get(...)` to depend on another UI model.
+
+```ts
+const currentUser = yield* Model.get(CurrentUserModel);
+```
+
+Both are provided through layers. Production can provide real services and
+real child models; tests can provide fake services or replace a child model
+with `Model.layerValue(...)`.
+
+```ts
+const testLayer = ParentModel.layer.pipe(
+  Layer.provideMerge(Model.layerValue(CurrentUserModel, fakeUser)),
+  Layer.provideMerge(FakeProjectApi.layer),
+  Layer.provideMerge(Registry.layer),
+);
+```
+
+## Keys
+
+Singleton models omit a key. Keyed models add `<Key>()`.
+
+```ts
+interface TaskKey {
+  readonly id: string;
+}
+
+export class TaskModel extends Model.Service<TaskModel>()(
+  "docs/task",
+)<TaskKey>()({
+  make: ({ id }) =>
+    Effect.gen(function* () {
+      const title = Store.make(`Task ${id}`);
+
+      return {
+        inputs: {},
+        outputs: { title },
+        ui: { title },
+      };
+    }),
+}) {}
+```
+
+The same key resolves the same model instance. Keep keys small and stable:
+primitive values, flat plain-data records, or Effect `Data` values.
+
+## Child Models
+
+A child model is just another model in the Effect graph. The child owns one
+piece of UI behavior; the parent resolves that child and talks to its public
+sections.
+
+`ProjectPickerModel` below owns project selection. The parent does not reach
+into its local stores or handlers. It resolves the picker, listens to
+changes in `picker.outputs.selectedProject`, and passes the child unit to the
+View through `ui`.
+
+<Tabs>
+  <TabItem label="Child">
+
+```ts
+import * as Effect from "effect/Effect";
+import { Event, Model, Store } from "@unitflow/core";
+
+export type ProjectId = string;
+
+interface Project {
+  readonly id: ProjectId;
+  readonly name: string;
+}
+
+interface ProjectPickerKey {
+  readonly id: string;
+}
+
+export class ProjectPickerModel extends Model.Service<ProjectPickerModel>()(
+  "docs/project-picker",
+)<ProjectPickerKey>()({
+  make: Effect.gen(function* () {
+    const projects = Store.make<ReadonlyArray<Project>>([
+      { id: "p1", name: "Lobby refresh" },
+      { id: "p2", name: "Mobile checkout" },
+    ]);
+    const selectedProject = Store.make<ProjectId | null>(null);
+
+    const select = yield* Event.make<ProjectId>().pipe(
+      Event.handler((projectId) => Store.set(selectedProject, projectId)),
+    );
+
+    return {
+      inputs: { select },
+      outputs: { selectedProject },
+      ui: {
+        projects,
+        selectedProject,
+        onSelect: select,
+      },
+    };
+  }),
+}) {}
+```
+
+  </TabItem>
+  <TabItem label="Parent">
+
+```ts
+import * as Effect from "effect/Effect";
+import { Event, Model, Store } from "@unitflow/core";
+import {
+  ProjectPickerModel,
+  type ProjectId,
+} from "./project-picker-model";
+
+export class ProjectPanelModel extends Model.Service<ProjectPanelModel>()(
+  "docs/project-panel",
+)({
+  make: Effect.gen(function* () {
+    const picker = yield* Model.get(ProjectPickerModel, {
+      id: "project-picker",
+    });
+    const currentProject = Store.make<ProjectId | null>(null);
+    const selected = Event.make<ProjectId>();
+
+    yield* picker.outputs.selectedProject.pipe(
+      Store.changed,
+      Event.handler((projectId) =>
+        Effect.gen(function* () {
+          if (projectId === null) return;
+
+          yield* Store.set(currentProject, projectId);
+          yield* Event.emit(selected, projectId);
+        }),
+      ),
+    );
+
+    return {
+      inputs: {},
+      outputs: { selected, currentProject },
+      ui: {
+        picker,
+        currentProject,
+      },
+    };
+  }),
+}) {}
+```
+
+  </TabItem>
+</Tabs>
+
+The parent View passes `picker` to the child View. JSX does not need to know
+how the child is built.
+
+## Model.list
+
+Use `Model.list(ChildModel)` when the parent owns a dynamic collection of
+child models: kanban cards, tabs, uploads, rows, inspectors, and similar UI
+pieces.
+
+In a board, each task model owns one card. The board model owns the list of
+cards, creates and removes cards, and derives aggregate board state from the
+children.
+
+<Tabs>
+  <TabItem label="Child">
+
+```ts
+import * as Effect from "effect/Effect";
+import { Event, Model, Store } from "@unitflow/core";
+
+export type TaskStatus = "todo" | "doing" | "done";
+
+export interface TaskKey {
+  readonly id: string;
+}
+
+export interface TaskState {
+  readonly id: string;
+  readonly title: string;
+  readonly status: TaskStatus;
+}
+
+const initialTask = (id: string): TaskState => ({
+  id,
+  title: "New task",
+  status: "todo",
+});
+
+export class TaskModel extends Model.Service<TaskModel>()(
+  "docs/kanban/task",
+)<TaskKey>()({
+  make: ({ id }) =>
+    Effect.gen(function* () {
+      const state = Store.make<TaskState>(initialTask(id));
+
+      const rename = yield* Event.make<string>().pipe(
+        Event.handler((title) =>
+          Store.update(state, (task) => ({
+            ...task,
+            title: title.trim() === "" ? task.title : title,
+          })),
+        ),
+      );
+
+      const move = yield* Event.make<TaskStatus>().pipe(
+        Event.handler((status) =>
+          Store.update(state, (task) => ({ ...task, status })),
+        ),
+      );
+
+      return {
+        inputs: { rename, move },
+        outputs: { state },
+        ui: { state, rename, move },
+      };
+    }),
+}) {}
+```
+
+  </TabItem>
+  <TabItem label="Parent">
+
+```ts
+import * as Effect from "effect/Effect";
+import { Event, Model, Store } from "@unitflow/core";
+import { TaskModel } from "./task-model";
+
+export class BoardModel extends Model.Service<BoardModel>()(
+  "docs/kanban/board",
+)({
+  make: Effect.gen(function* () {
+    const draft = Store.make("");
+    const tasks = yield* Model.list(TaskModel);
+
+    yield* tasks.push({ id: "task-1" });
+    yield* tasks.push({ id: "task-2" });
+
+    const taskStates = tasks.select((task) => task.outputs.state);
+    const boardState = Store.combine([draft, taskStates], (draft, taskStates) => ({
+      draft,
+      columns: {
+        todo: taskStates.filter((task) => task.status === "todo"),
+        doing: taskStates.filter((task) => task.status === "doing"),
+        done: taskStates.filter((task) => task.status === "done"),
+      },
+    }));
+
+    let nextTaskId = 3;
+
+    const create = yield* Event.make<void>().pipe(
+      Event.handler(() =>
+        Effect.gen(function* () {
+          const title = (yield* Store.get(draft)).trim();
+          if (title === "") return;
+
+          const task = yield* tasks.push({ id: `task-${nextTaskId++}` });
+          yield* Event.emit(task.inputs.rename, title);
+          yield* Store.set(draft, "");
+        }),
+      ),
+    );
+
+    const remove = yield* Event.make<string>().pipe(
+      Event.handler((id) => tasks.remove({ id })),
+    );
+
+    return {
+      inputs: { create, remove },
+      outputs: { taskStates },
+      ui: {
+        boardState,
+        taskUnits: tasks.items,
+        setDraft: Event.setter(draft),
+        create,
+        remove,
+      },
+    };
+  }),
+}) {}
+```
+
+  </TabItem>
+</Tabs>
+
+`tasks.items` is the live store of child units that a board View passes to
+task Views. Each item includes the list key as `task.key`, so a task keyed by
+`{ id: "task-1" }` can render with `key={task.key.id}`. `tasks.select(...)`
+creates one store from the same output in each child. `tasks.push(...)`
+creates or reuses a child by key, and `tasks.remove(...)` removes that child
+from this list.

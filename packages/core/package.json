@@ -27,9 +27,9 @@
       "types": "./dist/registry.d.ts",
       "default": "./dist/registry.js"
     },
-    "./resource": {
-      "types": "./dist/resource.d.ts",
-      "default": "./dist/resource.js"
+    "./query": {
+      "types": "./dist/query.d.ts",
+      "default": "./dist/query.js"
     },
     "./runtime": {
       "types": "./dist/runtime.d.ts",

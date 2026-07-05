@@ -427,7 +427,34 @@ const CounterPanelLayer = CounterPanelModel.layer.pipe(
 const RenderLayer = RenderModel.layer.pipe(Layer.provideMerge(Registry.layer));
 const fakeLabelStore = Store.make("fake");
 
+class HeadlessModel extends Model.Service<HeadlessModel>()(
+  "/test/effect-model/HeadlessModel",
+)({
+  make: () =>
+    Effect.gen(function* () {
+      const total = Store.make(0);
+      const add = yield* Event.make<number>().pipe(
+        Event.handler((amount) => Store.update(total, (value) => value + amount)),
+      );
+
+      // Headless: другие модели резолвят её как сервис, View-поверхности нет.
+      return {
+        inputs: { add },
+        outputs: { total },
+      };
+    }),
+}) {}
+
 describe("Unitflow", () => {
+  it.effect("a headless model (no ui section) constructs and serves ports", () =>
+    Effect.gen(function* () {
+      const headless = yield* Model.get(HeadlessModel);
+
+      yield* Registry.allSettled(Event.emit(headless.inputs.add, 5));
+      assert.strictEqual(yield* Store.get(headless.outputs.total), 5);
+    }).pipe(Effect.provide(HeadlessModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
+  );
+
   it.effect("runs model streams inside the registry scope", () =>
     Effect.gen(function* () {
       const counter = yield* Model.get(CounterModel);
@@ -1168,7 +1195,12 @@ describe("Model.list", () => {
         "item:c",
         "item:b",
       ]);
-      assert.strictEqual((yield* Store.get(list.items)).length, 3);
+      const items = yield* Store.get(list.items);
+      assert.strictEqual(items.length, 3);
+      assert.deepStrictEqual(
+        items.map((item) => item.key),
+        [{ id: "a" }, { id: "c" }, { id: "b" }],
+      );
 
       const found = yield* list.get({ id: "a" });
       assert.isTrue(Option.isSome(found));

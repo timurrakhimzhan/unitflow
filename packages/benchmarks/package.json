@@ -1,0 +1,23 @@
+{
+  "name": "@unitflow/benchmarks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Performance benchmarks for Unitflow and comparable state managers.",
+  "scripts": {
+    "bench": "pnpm --filter @unitflow/core build && node --expose-gc src/index.mjs",
+    "bench:quick": "BENCH_PROFILE=quick pnpm bench"
+  },
+  "dependencies": {
+    "@preact/signals-core": "^1.14.3",
+    "@reatom/core": "^1001.1.0",
+    "@unitflow/core": "workspace:^",
+    "effect": "4.0.0-beta.88",
+    "effector": "^23.4.4",
+    "jotai": "^2.20.1",
+    "mobx": "^6.16.1",
+    "nanostores": "^1.4.0",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {}
+}

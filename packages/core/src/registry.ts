@@ -209,9 +209,20 @@ export const trackedStream = <A>(
     ),
   );
 
+/** Confirm one counted item outside the pull machinery — the direct handler
+ * dispatch path completes an item as soon as its handling finished. The
+ * guard mirrors `completeOutstanding`: a released tracker already returned
+ * its counts, so completing late must not double-decrement. */
+export const completeCounted = (registry: RegistryService, tracker: SubscriptionTracker): void => {
+  if (tracker.count === 0) return;
+  tracker.count -= 1;
+  registry.settle.pending -= 1;
+  wakeIfSettled(registry.settle);
+};
+
 /** Interrupts and `Done` signals (a source pubsub shut down during disposal)
  * are the normal ways a pipeline ends; anything else is a bug worth logging. */
-const isExpectedTermination = (cause: Cause.Cause<unknown>): boolean =>
+export const isExpectedTermination = (cause: Cause.Cause<unknown>): boolean =>
   cause.reasons.every(
     (reason) =>
       Cause.isInterruptReason(reason) ||

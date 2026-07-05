@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
-import { Event, Model, ModelRuntime, Registry, Store } from "../src/index.js";
+import { Event, Model, UnitflowRuntime, Registry, Store } from "../src/index.js";
 
 class CounterModel extends Model.Service<CounterModel>()(
   "/test/runtime-test/CounterModel",
@@ -96,7 +96,7 @@ const eventually = (predicate: () => boolean): Effect.Effect<void> =>
   });
 
 const awaitSettled = <M extends Model.AnyService>(
-  runtime: ModelRuntime.ModelRuntime<any, any>,
+  runtime: UnitflowRuntime.UnitflowRuntime<any, any>,
   model: M,
   key: Model.KeyOf<M>,
 ): Effect.Effect<void> =>
@@ -115,7 +115,7 @@ const awaitSettled = <M extends Model.AnyService>(
   });
 
 const awaitStoreValue = <A>(
-  runtime: ModelRuntime.ModelRuntime<any, any>,
+  runtime: UnitflowRuntime.UnitflowRuntime<any, any>,
   store: Store.Source<A>,
   expected: A,
 ): Effect.Effect<void> =>
@@ -135,7 +135,7 @@ const awaitStoreValue = <A>(
 describe("Unitflow runtime binding", () => {
   it.effect("resolves models and streams store updates into subscriptions", () =>
     Effect.gen(function* () {
-      const runtime = ModelRuntime.make(CounterModel.layer);
+      const runtime = UnitflowRuntime.make(CounterModel.layer);
 
       yield* awaitSettled(runtime, CounterModel, undefined);
       const result = runtime.getModel(CounterModel, undefined);
@@ -156,7 +156,7 @@ describe("Unitflow runtime binding", () => {
 
   it.effect("returns the same snapshot reference until the store changes", () =>
     Effect.gen(function* () {
-      const runtime = ModelRuntime.make(CounterModel.layer);
+      const runtime = UnitflowRuntime.make(CounterModel.layer);
 
       yield* awaitSettled(runtime, CounterModel, undefined);
       const first = runtime.getModel(CounterModel, undefined);
@@ -169,7 +169,7 @@ describe("Unitflow runtime binding", () => {
 
   it.effect("reports failed model construction", () =>
     Effect.gen(function* () {
-      const runtime = ModelRuntime.make(BrokenModel.layer);
+      const runtime = UnitflowRuntime.make(BrokenModel.layer);
 
       yield* awaitSettled(runtime, BrokenModel, undefined);
       assert.strictEqual(runtime.getModel(BrokenModel, undefined)._tag, "Failed");
@@ -182,7 +182,7 @@ describe("Unitflow runtime binding", () => {
     Effect.gen(function* () {
       leasedBuilt = 0;
       leasedDisposed = 0;
-      const runtime = ModelRuntime.make(LeasedModel.layer);
+      const runtime = UnitflowRuntime.make(LeasedModel.layer);
       const listener = () => undefined;
 
       // Mount: the subscription opens a binding scope and leases the instance.
@@ -212,7 +212,7 @@ describe("Unitflow runtime binding", () => {
   it.effect("a remount after the instance died never renders stale disposed ports", () =>
     Effect.gen(function* () {
       ephemeralBuilt = 0;
-      const runtime = ModelRuntime.make(EphemeralModel.layer);
+      const runtime = UnitflowRuntime.make(EphemeralModel.layer);
       const listener = () => undefined;
 
       const unmount = runtime.subscribeModel(EphemeralModel, "a", listener);

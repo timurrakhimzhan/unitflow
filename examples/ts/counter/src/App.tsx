@@ -2,7 +2,7 @@ import { View } from "@unitflow/react";
 import { CounterModel } from "./model";
 
 export const CounterApp = View.make(CounterModel, (unit) => {
-  const { count, doubled, parity, step } = unit.view;
+  const { count, doubled, parity, step } = unit.counterState;
 
   return (
     <main className="counter-shell">
