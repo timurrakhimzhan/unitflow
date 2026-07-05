@@ -42,6 +42,21 @@ instead of a separate UI DSL.
 
 The result is UI state management that still feels like Effect architecture.
 
+Unitflow is inspired by [Effector](https://effector.dev/): explicit stores,
+events, and UI logic outside the component tree, rebuilt around Effect services,
+layers, scopes, and dependency injection.
+
+## Why Not Effect Atom?
+
+Effect Atom is powerful, but `Atom` is a broad primitive: state, derived data,
+async work, writes, and persistence can all become atoms, and the code
+structure is still up to you. That much freedom is also hard on agents: without
+an explicit shape, generated code tends to become messy and hard to review.
+Unitflow is more
+opinionated: it gives frontend code a model-first blueprint, where the UI unit
+is an Effect service resolved through dependency injection and built from
+smaller primitives like stores, events, queries, and mutations.
+
 ## Composition Example
 
 The useful shape is not a giant model. It is a parent model that owns a flow,

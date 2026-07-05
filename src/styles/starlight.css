@@ -77,21 +77,47 @@
 
 .unitflow-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
   gap: 1rem;
   margin: 1.5rem 0;
 }
 
 .unitflow-card {
-  padding: 1.25rem 1.4rem;
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  min-height: 12.5rem;
+  margin-top: 0;
+  padding: 1.35rem 1.45rem;
   border: 1px solid color-mix(in srgb, var(--sl-color-gray-5), transparent 40%);
-  border-radius: 10px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--sl-color-black), var(--sl-color-gray-6) 14%);
 }
 
+.unitflow-card + .unitflow-card {
+  margin-top: 0;
+}
+
+.unitflow-card .sl-heading-wrapper {
+  margin: 0 0 0.65rem;
+  font-size: var(--sl-text-xl);
+  line-height: 1.2;
+}
+
+.unitflow-card .sl-heading-wrapper > :first-child {
+  display: block;
+  padding-inline-end: 0;
+}
+
+.unitflow-card .sl-anchor-link {
+  display: none;
+}
+
 .unitflow-card h3 {
-  margin: 0 0 0.5rem;
-  font-size: var(--sl-text-lg);
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
   color: var(--sl-color-white);
 }
 
@@ -104,4 +130,14 @@
 
 .unitflow-card code {
   font-size: 0.85em;
+}
+
+@media (max-width: 44rem) {
+  .unitflow-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .unitflow-card {
+    min-height: 0;
+  }
 }

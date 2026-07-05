@@ -51,6 +51,5 @@ from the model instead of computing in the component.
 ## Lifetime
 
 Parent models own child models they get with `Model.get`. React can own root
-models. The target lifetime design is scope-based ownership: closing the parent
-scope releases its child references; the last released owner closes the child
-scope.
+models. Ownership is scope-based: closing the parent scope releases its child
+references, and the last released owner closes the child scope.

@@ -12,6 +12,18 @@ export default defineConfig({
       logo: {
         src: "./src/assets/unitflow-logo.svg",
       },
+      social: [
+        {
+          icon: "github",
+          label: "GitHub",
+          href: "https://github.com/timurrakhimzhan/unitflow",
+        },
+        {
+          icon: "npm",
+          label: "npm",
+          href: "https://www.npmjs.com/package/@unitflow/core",
+        },
+      ],
       customCss: ["./src/styles/starlight.css"],
       sidebar: [
         {
@@ -19,6 +31,7 @@ export default defineConfig({
           items: [
             { slug: "overview" },
             { slug: "install" },
+            { slug: "recommendations" },
             { slug: "store" },
             { slug: "events" },
             { slug: "model" },

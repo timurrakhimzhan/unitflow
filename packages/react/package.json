@@ -1,11 +1,23 @@
 {
   "name": "@unitflow/react",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "React bindings for Unitflow.",
   "license": "MIT",
   "sideEffects": false,
   "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/timurrakhimzhan/unitflow.git",
+    "directory": "packages/react"
+  },
+  "bugs": {
+    "url": "https://github.com/timurrakhimzhan/unitflow/issues"
+  },
+  "homepage": "https://github.com/timurrakhimzhan/unitflow#readme",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

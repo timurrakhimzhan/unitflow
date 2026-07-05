@@ -3,7 +3,7 @@ title: Unitflow
 description: UI models as Effect services with scoped state, actions, async work, and tests.
 template: splash
 hero:
-  tagline: Effect-first UI state management.
+  tagline: Effect-native state for UI flows that outgrow hooks.
   actions:
     - text: Why Unitflow
       link: /overview/
@@ -15,50 +15,59 @@ hero:
 
 import { Tabs, TabItem } from "@astrojs/starlight/components";
 
-Unitflow brings UI behavior into the Effect runtime. Models are UI-facing
-Effect Services: they own state, actions, async work, child models, and
-lifetime, and they compose through Effect dependency injection.
+Unitflow brings Effect's architectural strengths to frontend code:
+self-contained models, typed boundaries, renderer-independent behavior, and a
+shape agents can follow.
 
-The core idea: build UI models with the same layers, scopes, streams, fibers,
-typed errors, schedules, schemas, and test replacement you already use in
-Effect. A View only binds the model's `ui` to the screen.
+Instead of scattering behavior across components, hooks, atoms, and project
+conventions, build UI behavior as Effect-powered models that own their state,
+actions, async work, dependencies, and cleanup.
 
-## Why It Exists
+Unitflow is inspired by [Effector](https://effector.dev/): explicit stores,
+events, and UI logic outside the component tree, rebuilt around Effect services,
+layers, scopes, and dependency injection.
 
-Unitflow does not ask you to adopt a separate UI framework. It adds small
-UI-shaped primitives on top of Effect.
+## Why Unitflow
+
+Use Unitflow when frontend code needs the same architectural weight as the
+rest of your Effect application.
 
 <div class="unitflow-cards">
   <div class="unitflow-card">
 
-### Compose via Effect DI
+### Bring Effect's Backend Power to the Frontend
 
-Models are real Effect Services. Layers, Scope, Stream, Schema, and Schedule
-are already available inside `make` — no adapter layer to learn.
-
-  </div>
-  <div class="unitflow-card">
-
-### Explicit Boundaries
-
-The `inputs` / `outputs` / `ui` contract is enforced by the type system: a
-model without `ui` cannot bind to a View.
+Dependency injection, full type safety, `Scope`, `Stream`, `Schema`, fibers,
+and the rest of the Effect ecosystem are no longer reserved for server code.
+Unitflow brings that power into your frontend architecture.
 
   </div>
   <div class="unitflow-card">
 
-### Agent-Friendly
+### Keep Frontend Architecture Scalable
 
-A small, regular API an LLM can follow reliably, backed by a compact skill
-file that teaches the conventions in one read.
+Each model owns one part of the UI: its state, actions, async work,
+dependencies, and cleanup. Models communicate through typed boundaries, so the
+app grows as a hierarchy of explicit units instead of a web of shared state.
 
   </div>
   <div class="unitflow-card">
 
-### Test Headlessly
+### Build Behavior Once, Bind Any View
 
-`Registry.allSettled` drives full async and reactive flows headlessly — no
-mocks, no DOM.
+Unitflow keeps behavior outside the component tree. A model can be driven by
+React, Vue, tests, tooling, or anything else through a renderer-independent
+boundary.
+
+  </div>
+  <div class="unitflow-card">
+
+### Agent-Friendly By Design
+
+Effect is already a strong substrate for agents: typed services, layers,
+errors, and composable programs. Unitflow adds clear frontend boundaries and
+simple primitives, so agents can follow the architecture instead of inventing
+it on every change.
 
   </div>
 </div>
@@ -101,37 +110,3 @@ Packages:
 
 - [`@unitflow/core`](https://www.npmjs.com/package/@unitflow/core)
 - [`@unitflow/react`](https://www.npmjs.com/package/@unitflow/react)
-
-## See It in Context
-
-A task board shows model boundaries end to end: each task owns its own state
-and events, the board owns the dynamic list and derives aggregate state, and
-tests drive the same public actions the UI does — no mocking required.
-
-[Read the full Task Board example →](/examples/task-board/)
-
-## Reading Order
-
-Read the docs in the same order Unitflow code is usually built:
-
-```txt
-Install           -> add the packages
-Stores            -> state: make, get, set, derive, changed
-Events            -> actions: make, emit, handler
-Model             -> Effect service, contract, dependencies, children
-Queries           -> async reads
-Mutations         -> async writes
-React Binding     -> render the model's ui
-Testing           -> layers, fakes, allSettled
-Streams           -> advanced pipelines
-Lifetime          -> scopes, TTL, finalizers
-```
-
-Then apply it to UI through React Views that render model `ui`.
-
-## Package Plan
-
-```txt
-@unitflow/core    Model, Store, Event, Registry, Query, Mutation
-@unitflow/react   Unitflow root, View.make, hooks, and React re-exports
-```
