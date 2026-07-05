@@ -3,7 +3,8 @@
 React binding for Unitflow.
 
 `@unitflow/react` re-exports `@unitflow/core` and adds the React pieces:
-`Unitflow`, `View.make`, `useStore`, and `useEvent`.
+`Unitflow`, `View.make`, `useStore`, and `useEvent`. Stores and events stay in
+models; React binds only the model's public `ui` surface.
 
 Unitflow is inspired by [Effector](https://effector.dev/): explicit stores,
 events, and UI logic outside the component tree, rebuilt around Effect services,
@@ -21,10 +22,10 @@ pnpm add @unitflow/react @unitflow/core effect@4.0.0-beta.88 react
 import { Event, Model, Store, Unitflow, UnitflowRuntime, View } from "@unitflow/react";
 ```
 
-## Model
+## Stores and Events in a Model
 
-Models stay outside React. They own state, actions, async work, dependencies,
-and lifetime as Effect services.
+Stores and events stay outside React components. A model owns them as part of
+one UI unit.
 
 ```ts
 import * as Effect from "effect/Effect";

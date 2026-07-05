@@ -2,9 +2,10 @@
 
 Core Unitflow runtime primitives for Effect-native frontend architecture.
 
-`@unitflow/core` gives UI behavior a model-first shape: models are Effect
-services, stores hold renderable state, events represent actions, queries own
-async reads, and mutations own async writes.
+`@unitflow/core` starts with small frontend primitives: stores hold renderable
+state, events represent actions, queries own async reads, and mutations own
+async writes. Models give those primitives an Effect service boundary with
+dependencies, lifetime, and typed ports.
 
 Unitflow is inspired by [Effector](https://effector.dev/): explicit stores,
 events, and UI logic outside the component tree, rebuilt around Effect services,
@@ -25,57 +26,13 @@ import { Event, Model, Mutation, Query, Registry, Store } from "@unitflow/core";
 ## The Shape
 
 ```txt
-Model     -> UI-facing Effect service and ownership boundary
 Store     -> renderable state
 Event     -> typed action
 Query     -> async read with visible state
 Mutation  -> async write with visible state and done event
+Model     -> UI-facing Effect service and ownership boundary
 Registry  -> scoped runtime storage, model instances, and settling
 ```
-
-## Minimal Model
-
-```ts
-import * as Effect from "effect/Effect";
-import { Event, Model, Store } from "@unitflow/core";
-
-export class CounterModel extends Model.Service<CounterModel>()(
-  "readme/counter",
-)({
-  make: Effect.gen(function* () {
-    const count = Store.make(0);
-
-    const increment = yield* Event.make<void>().pipe(
-      Event.handler(() => Store.update(count, (value) => value + 1)),
-    );
-
-    return {
-      inputs: { increment },
-      outputs: { count },
-      ui: { count, increment },
-    };
-  }),
-}) {}
-```
-
-## Models
-
-A model is an Effect service for one UI unit: a screen, form, row, dialog,
-panel, or headless behavior service. It owns state, actions, async work,
-dependencies, child models, and lifetime.
-
-Models expose typed sections:
-
-```ts
-return {
-  inputs: {},  // actions other code may trigger
-  outputs: {}, // state/events other code may observe
-  ui: {},      // render surface for a View
-};
-```
-
-Because models are services, they compose with `Layer`, can depend on regular
-Effect services, and can be replaced in tests.
 
 ## Stores
 
@@ -132,6 +89,50 @@ return {
 ```
 
 Mutations are model-owned async writes. They expose `run`, `state`, and `done`.
+
+## Models
+
+A model is an Effect service for one UI unit: a screen, form, row, dialog,
+panel, or headless behavior service. It owns state, actions, async work,
+dependencies, child models, and lifetime.
+
+Models expose typed sections:
+
+```ts
+return {
+  inputs: {},  // actions other code may trigger
+  outputs: {}, // state/events other code may observe
+  ui: {},      // render surface for a View
+};
+```
+
+Because models are services, they compose with `Layer`, can depend on regular
+Effect services, and can be replaced in tests.
+
+## Minimal Model
+
+```ts
+import * as Effect from "effect/Effect";
+import { Event, Model, Store } from "@unitflow/core";
+
+export class CounterModel extends Model.Service<CounterModel>()(
+  "readme/counter",
+)({
+  make: Effect.gen(function* () {
+    const count = Store.make(0);
+
+    const increment = yield* Event.make<void>().pipe(
+      Event.handler(() => Store.update(count, (value) => value + 1)),
+    );
+
+    return {
+      inputs: { increment },
+      outputs: { count },
+      ui: { count, increment },
+    };
+  }),
+}) {}
+```
 
 ## Testing
 
