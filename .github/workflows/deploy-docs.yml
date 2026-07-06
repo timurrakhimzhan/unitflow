@@ -1,0 +1,23 @@
+name: Deploy docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "astro.config.mjs"
+      - "Dockerfile"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/deploy-docs.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install -g @railway/cli
+      - run: railway up --service docs --detach
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
