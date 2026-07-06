@@ -58,6 +58,7 @@ export default defineConfig({
           items: [
             { slug: "streams" },
             { slug: "lifetime" },
+            { slug: "devtools" },
           ],
         },
         {
