@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 import type { Pipeable } from "effect/Pipeable";
 import * as RcMap from "effect/RcMap";
 import * as Scope from "effect/Scope";
+import { namePorts } from "./debug/naming.js";
 import * as Event from "./event.js";
 import * as Flatten from "./internals.js";
 import {
@@ -351,7 +352,17 @@ const makeAccessor = <Key, A extends Shape, E, R>(
         Scope.Scope,
         scope,
       );
+      yield* Scope.addFinalizer(
+        scope,
+        Effect.sync(() => registry.debug?.instance(mapKey, "disposed")),
+      );
       return yield* make(key).pipe(
+        Effect.tap((shape) =>
+          Effect.sync(() => {
+            namePorts(shape, modelKey, key, registry.debug);
+            registry.debug?.instance(mapKey, "created");
+          }),
+        ),
         Effect.tap(materialize),
         Effect.provideContext(instanceContext),
         // Failures are not cached: drop the entry BEFORE waiters wake — a

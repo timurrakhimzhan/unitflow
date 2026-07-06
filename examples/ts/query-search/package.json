@@ -11,7 +11,8 @@
     "@unitflow/react": "workspace:*",
     "effect": "4.0.0-beta.88",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.2.7",
+    "@unitflow/devtools": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "19.2.17",

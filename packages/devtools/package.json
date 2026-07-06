@@ -1,0 +1,48 @@
+{
+  "name": "@unitflow/devtools",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Unitflow runtime inspector bridge and MCP server for agent-driven debugging.",
+  "license": "MIT",
+  "sideEffects": false,
+  "files": ["dist"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./bridge": {
+      "types": "./dist/bridge.d.ts",
+      "default": "./dist/bridge.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "default": "./dist/mcp.js"
+    }
+  },
+  "bin": {
+    "unitflow-mcp": "./dist/bin.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@unitflow/core": "workspace:^",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.5.13",
+    "effect": "4.0.0-beta.88",
+    "typescript": "6.0.3"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.88"
+  }
+}

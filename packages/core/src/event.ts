@@ -235,23 +235,27 @@ const closeHandlerEntry = (registry: RegistryService, id: string, entry: Handler
  * direct handler delivery — the order every emit path must keep (a subscriber
  * woken by the publish must already find its item accounted for). The store
  * layer feeds `Store.changed` events through this without a watcher pipeline.
+ * The debug window spans the whole step, so synchronously ran handlers (and
+ * whatever they publish) record this emit as their cause.
  */
 export const dispatchUnsafe = <A>(
   registry: RegistryService,
   channel: PubSub.PubSub<A>,
-  id: string,
+  event: { readonly id: string; readonly name?: string },
   value: A,
 ): void => {
-  trackPublish(registry, id);
+  const closeWindow = registry.debug !== undefined ? registry.debug.emit(event, value) : undefined;
+  trackPublish(registry, event.id);
   PubSub.publishUnsafe(channel, value);
-  offerHandlers(registry, id, value);
+  offerHandlers(registry, event.id, value);
+  closeWindow?.();
 };
 
 const emitSlow = <A>(event: Sink<A>, value: A): Effect.Effect<void, never, Registry> =>
   Effect.gen(function* () {
     const registry = yield* Registry;
     const channel = yield* pubsub(event);
-    yield* Effect.sync(() => dispatchUnsafe(registry, channel, event.id, value));
+    yield* Effect.sync(() => dispatchUnsafe(registry, channel, event, value));
   });
 
 export const emit = <E extends Sink<any>>(
@@ -271,7 +275,7 @@ export const emit = <E extends Sink<any>>(
     if (registry !== undefined) {
       const channel = registry.events.get(event.id);
       if (channel !== undefined) {
-        dispatchUnsafe(registry, channel, event.id, value);
+        dispatchUnsafe(registry, channel, event, value);
         return Effect.void;
       }
     }

@@ -128,11 +128,31 @@ createRoot(document.getElementById("root") as HTMLElement).render(
 );
 ```
 
+## Agent Devtools (MCP)
+
+Your running app, visible to a coding agent: live model instances, store
+values, and a causal event log — "this emit ran this handler which wrote this
+store". Ports are named automatically from the model contract.
+
+```ts
+import { devtools } from "@unitflow/devtools";
+
+if (import.meta.env.DEV) devtools(runtime);
+```
+
+```sh
+claude mcp add unitflow -- npx -y --package=@unitflow/devtools unitflow-mcp
+```
+
+See [`packages/devtools`](packages/devtools/README.md) for the tool list and
+options.
+
 ## Packages
 
 ```txt
-@unitflow/core    Model, Store, Event, Registry, Query, Mutation, runtime
-@unitflow/react   React binding, Unitflow root, View.make, hooks, core re-exports
+@unitflow/core      Model, Store, Event, Registry, Query, Mutation, runtime
+@unitflow/react     React binding, Unitflow root, View.make, hooks, core re-exports
+@unitflow/devtools  Runtime inspector bridge and MCP server for agents
 ```
 
 ## Development

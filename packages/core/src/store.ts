@@ -291,16 +291,21 @@ const completeStoreOutstanding = (
 };
 
 /** The full write in one synchronous critical section: the settle count lands
- * before the publish wakes a subscriber (see `trackedModify`). */
+ * before the publish wakes a subscriber (see `trackedModify`). The debug
+ * window spans the whole section, so everything dispatched synchronously by
+ * the publish (changed events, handler cascades) records this write as its
+ * cause. */
 const writeUnsafe = <A>(
   registry: RegistryService,
   subscriptionRef: SubscriptionRef.SubscriptionRef<A>,
   store: Sink<A>,
   value: A,
 ): void => {
+  const closeWindow = registry.debug !== undefined ? registry.debug.write(store, value) : undefined;
   trackPublish(registry, store.id);
   setUnsafe(subscriptionRef, value);
   offerStoreListeners(registry, store, value);
+  closeWindow?.();
 };
 
 const trackedSetSlow = <A>(
@@ -352,6 +357,17 @@ const getSlow = <A>(store: Source<A>): Effect.Effect<A, never, Registry> => {
     return resolved;
   }
   return Effect.map(ref(store), SubscriptionRef.getUnsafe);
+};
+
+/** INTERNAL. The debug inspector's snapshot evaluator: resolves any source —
+ * plain, combined, flattened — against materialized refs, synchronously and
+ * without effects. `None` when a needed ref is not materialized. */
+export const evalForDebug = (
+  registry: RegistryService,
+  store: Source<any>,
+): Option.Option<unknown> => {
+  const value = evalSync(registry, store, new Map());
+  return value === Unresolved ? Option.none() : Option.some(value);
 };
 
 export const get = <A>(store: Source<A>): Effect.Effect<A, never, Registry> =>
@@ -728,9 +744,15 @@ export const changed = <A>(
         const value = evalSync(registry, store, needsMemo ? new Map() : undefined);
         if (value === Unresolved || Object.is(value, current)) return;
         current = value;
+        // The store may have been named after this event was created (port
+        // naming runs when `make` returns) — inherit lazily.
+        if (changedEvent.name === undefined && store.name !== undefined) {
+          // eslint-disable-next-line revizo/no-type-assertion
+          (changedEvent as { name?: string }).name = `${store.name}.changed`;
+        }
         // The evaluator returns this source's value type.
         // eslint-disable-next-line revizo/no-type-assertion
-        Event.dispatchUnsafe(registry, channel, changedEvent.id, value as A);
+        Event.dispatchUnsafe(registry, channel, changedEvent, value as A);
       },
       close() {
         closed = true;
