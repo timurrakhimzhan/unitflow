@@ -1,11 +1,13 @@
 {
   "name": "@unitflow/react",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "description": "React bindings for Unitflow.",
   "license": "MIT",
   "sideEffects": false,
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "publishConfig": {
     "access": "public"
   },
