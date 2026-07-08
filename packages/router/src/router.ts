@@ -763,53 +763,36 @@ interface CompiledRoute<R extends Route.Any> {
   readonly length: number;
 }
 
-type StaticParamOptions<Params> = IsAny<Params> extends true
-  ? { readonly params?: Params }
-  : keyof Params extends never
-    ? { readonly params?: Params }
-    : { readonly params: Params };
-
-type StaticSearchOptions<Search> = IsAny<Search> extends true
-  ? { readonly search?: Search }
-  : keyof Search extends never
-    ? { readonly search?: Search }
-    : RequiredKeys<Search> extends never
-      ? { readonly search?: Search }
-      : { readonly search: Search };
-
-/** A route target expressible WITHOUT a live router: unlike
- * {@link ToOptions} there are no `search: true`/`hash: true`/function forms
- * — those inherit from the current location and stay on `navigate`/`Link`. */
-export type TargetOptions<TRouter extends AnyRouter | AnyRouterController, To extends RoutePath<TRouter>> = {
-  readonly to: To;
-  readonly hash?: string;
-  readonly state?: unknown;
-} & StaticParamOptions<PathParamsFor<TRouter, To>> &
-  StaticSearchOptions<SearchInputFor<TRouter, To>>;
-
-/** Location builders attached to the router value itself: PURE, synchronous
- * functions of the static route table — no DI, no instance. Schema codecs
- * encode synchronously (an async/service-requiring codec is a defect).
- * A separate interface intersected onto {@link RouterModel} at `make` —
- * declared inside RouterModel these signatures close a resolution cycle
- * (param -> options type -> AnyRouter -> RouterModel -> param) that the
- * ServiceClass heritage forces TypeScript to evaluate eagerly. */
-export interface RouterTargets<Group extends AnyRouteGroup> {
+/** Location helpers attached to the router value itself
+ * (`AppRouter.buildHref({...})`). A separate interface intersected onto
+ * {@link RouterModel} at `make` — declared inside RouterModel these method
+ * signatures close a resolution cycle (param -> ToOptions -> AnyRouter ->
+ * RouterModel -> param) that the ServiceClass heritage forces TypeScript to
+ * evaluate eagerly. */
+export interface RouterTargets<Id extends string, Group extends AnyRouteGroup> {
   /** Builds a location for a route target without navigating. */
   readonly buildLocation: <const To extends RoutePath<RouterController<Group>>>(
-    options: TargetOptions<RouterController<Group>, To>,
-  ) => ParsedLocation;
+    options: ToOptions<RouterController<Group>, To>,
+  ) => Effect.Effect<
+    ParsedLocation,
+    unknown,
+    RouterModel<Id, Group> | Registry | RouterServicesForGroup<Group>
+  >;
   /** Builds an href string for a route target without navigating. */
   readonly buildHref: <const To extends RoutePath<RouterController<Group>>>(
-    options: TargetOptions<RouterController<Group>, To>,
-  ) => string;
+    options: ToOptions<RouterController<Group>, To>,
+  ) => Effect.Effect<
+    string,
+    unknown,
+    RouterModel<Id, Group> | Registry | RouterServicesForGroup<Group>
+  >;
 }
 
 export const make = <const Id extends string, const Group extends AnyRouteGroup>(
   id: Id,
   routeGroup: Group,
   options: RouterOptions = {},
-): RouterModel<Id, Group> & RouterTargets<Group> => {
+): RouterModel<Id, Group> & RouterTargets<Id, Group> => {
   // The `routes` model's per-key claim — `Model.get(router.routes, K)`
   // returns THE route with id K — is only sound if ids are unique: the unit
   // resolves its route by `find(route.id === key)`. Enforce the
@@ -869,53 +852,13 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
   });
   const routes = routesService as unknown as RoutesModel<Id, Group>;
 
-  const parseSearch = options.parseSearch ?? defaultParseSearch;
-  const stringifySearch = options.stringifySearch ?? defaultStringifySearch;
-  const buildLocation = (
-    target: TargetOptions<RouterController<Group>, RoutePath<RouterController<Group>>>,
-  ): ParsedLocation => {
-    const found = routeGroup.routes.find((current) => current.path === target.to);
-    if (found === undefined) {
-      throw new Error(`Unitflow router cannot build unknown route "${String(target.to)}".`);
-    }
-    const paramsSchema = found.options.params;
-    const paramsSource = target.params ?? {};
-    const routeParams =
-      paramsSchema !== undefined
-        ? // A codec whose ENCODING needs services cannot be built statically —
-          // that exotic case dies here as a defect, by design.
-          // eslint-disable-next-line revizo/no-type-assertion
-          toPathParams(Schema.encodeSync(paramsSchema as Schema.Codec<any, any, any, never>)(paramsSource))
-        : found.options.stringifyParams !== undefined
-          ? found.options.stringifyParams(paramsSource as never)
-          : toPathParams(paramsSource);
-    const pathname = addBasepath(interpolatePath(found.path, routeParams), options.basepath);
-    const definition = found.options.search;
-    const searchSource = (target.search ?? {}) as SearchRecord;
-    const rawSearch =
-      definition === undefined
-        ? toRawSearch(searchSource)
-        : isSchemaCodec(definition)
-          ? // eslint-disable-next-line revizo/no-type-assertion
-            toRawSearch(Schema.encodeSync(definition as Schema.Codec<any, any, any, never>)(searchSource))
-          : definition.encode === undefined
-            ? toRawSearch(searchSource)
-            : definition.encode(searchSource as never);
-    const searchString = stringifySearch(rawSearch);
-    const hash = target.hash ?? "";
-    return makeLocation(
-      `${pathname}${searchString}${hash === "" ? "" : `#${hash}`}`,
-      parseSearch,
-      target.state,
-    );
-  };
-
   return Object.assign(router, {
     routes,
     layer: routes.layer.pipe(Layer.provideMerge(router.layer)),
-    buildLocation,
-    buildHref: (target: TargetOptions<RouterController<Group>, RoutePath<RouterController<Group>>>) =>
-      buildLocation(target).href,
+    buildLocation: (options: ToOptions<RouterController<Group>, RoutePath<RouterController<Group>>>) =>
+      Effect.flatMap(getController(router), (api) => api.buildLocationEffect(options as never)),
+    buildHref: (options: ToOptions<RouterController<Group>, RoutePath<RouterController<Group>>>) =>
+      Effect.flatMap(getController(router), (api) => api.buildHrefEffect(options as never)),
   } as never);
 };
 
