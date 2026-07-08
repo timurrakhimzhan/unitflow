@@ -629,9 +629,15 @@ export type RouteShapes<Group extends AnyRouteGroup> = {
 /** The page-model map handed to `router.pages(...)`: keys are the router's
  * route ids (a typo will not compile), values are the page models. Declared
  * AFTER the models — never on the route — because a route referencing its
- * model while the model reads `router.routes` is a type-inference cycle. */
+ * model while the model reads `router.routes` is a type-inference cycle.
+ *
+ * Values are `Model.Singleton` on purpose: `makePages` leases each one with
+ * `Model.get(pageModel)`, no key. A keyed page model has nowhere to receive
+ * one here — page data is meant to be gated on the route's own ports
+ * (`params`/`search`/`opened`), not on the page model's key. Wrap a keyed
+ * model in a singleton that leases it with the fixed key it needs. */
 export type PageMap<Group extends AnyRouteGroup> = {
-  readonly [Id in RouteIds<Group>]?: Model.AnyService;
+  readonly [Id in RouteIds<Group>]?: Model.Singleton;
 };
 
 type PageServicesOfMap<Pages> = {

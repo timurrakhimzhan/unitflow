@@ -37,9 +37,12 @@ export type RouteComponent<
  * into the routes map makes the router lease its model and hand the unit
  * back in — `user: UserPage` is the whole stitching. Deliberately typed
  * WITHOUT a call signature: a second callable union member would destroy
- * contextual typing of plain function entries. */
+ * contextual typing of plain function entries.
+ *
+ * `model` is `Model.Singleton`: `makePages` leases it with `Model.get`, no
+ * key — see {@link Router.PageMap}. */
 export interface ModelViewEntry {
-  readonly model: Model.AnyService;
+  readonly model: Model.Singleton;
 }
 
 type BoundaryComponent<M extends Router.AnyRouter = Router.RegisteredRouter> = (props: {

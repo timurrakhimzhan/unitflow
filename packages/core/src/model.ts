@@ -90,6 +90,12 @@ export interface Type<Key, A extends Shape, E, R> {
   readonly shape: () => A;
   readonly error: () => E;
   readonly services: () => R;
+  /** A plain literal, not a function: comparing `key: () => Key` directly
+   * against `key: () => void` would silently accept ANY `Key` — TypeScript
+   * treats a function returning `void` as accepting callbacks that return
+   * something, so `() => Key` is assignable to `() => void` regardless of
+   * `Key`. `hasKey` is what {@link Singleton} actually discriminates on. */
+  readonly hasKey: [Key] extends [void] ? false : true;
 }
 
 /** Primitives that may key a model directly or appear as a record key's fields. */
@@ -135,9 +141,19 @@ export interface ServiceClass<
   readonly modelType: Type<Key, A, E, R>;
 }
 
+/** `Type<any, ...>` with `hasKey` deliberately widened back to `boolean`:
+ * substituting `Key = any` into {@link Type} resolves `hasKey` to a fixed
+ * literal (not `boolean`, TypeScript's `any`-in-a-tuple-check subtyping), so
+ * an erased-key type would otherwise reject either keyed or singleton
+ * models by accident. Key-agnostic types ({@link AnyService}, {@link
+ * Viewable}) go through this instead of `Type<any, ...>` directly. */
+type ErasedKeyType<A extends Shape, E, R> = Omit<Type<any, A, E, R>, "hasKey"> & {
+  readonly hasKey: boolean;
+};
+
 export type AnyService = Context.Service<any, any> & {
   readonly modelKey: string;
-  readonly modelType: Type<any, Shape, any, any>;
+  readonly modelType: ErasedKeyType<Shape, any, any>;
 };
 
 /** A {@link Shape} whose `ui` section is present: what a View can bind. */
@@ -148,7 +164,21 @@ export interface ViewableShape extends Shape {
 /** A model whose shape exposes a `ui` section — the bound `View.make`
  * requires. Headless models (`inputs`/`outputs` only) do not satisfy it. */
 export type Viewable = AnyService & {
-  readonly modelType: Type<any, ViewableShape, any, any>;
+  readonly modelType: ErasedKeyType<ViewableShape, any, any>;
+};
+
+/** A model with a `void` key — `Model.get`/`Model.list` (and anything built
+ * on `AnyService`, like a router's page map) take no key argument for it.
+ * Narrows out keyed services at the type level: a keyed model assigned where
+ * `Singleton` is expected is a compile error, not a silent `Model.get` call
+ * with an `undefined` key at runtime.
+ *
+ * Discriminates on `modelType.hasKey`, not `modelType.key`'s function type —
+ * `key: () => Key` vs `key: () => void` would compare as assignable for ANY
+ * `Key` (TypeScript's void-returning-function leniency), silently accepting
+ * keyed models. `hasKey` is a plain literal, immune to that. */
+export type Singleton = AnyService & {
+  readonly modelType: { readonly hasKey: false };
 };
 
 type AnyEffect = Effect.Effect<Shape, unknown, unknown>;
@@ -520,6 +550,9 @@ const define = <Self, Id extends string, Key, A extends Shape, E, R>(
       shape: typeWitness<A>,
       error: typeWitness<E>,
       services: typeWitness<R>,
+      // Type-only, like the witnesses above: never read at runtime.
+      // eslint-disable-next-line revizo/no-type-assertion
+      hasKey: undefined as never,
     },
   });
 };
