@@ -18,7 +18,7 @@ export const UserRoute = Router.route("user", {
 });
 
 /** Router.make births BOTH models at once; the app only names them. */
-export const { model: NavigationModel, routes: RouteModel } = Router.make(
+export const { NavigationModel, RouteModel } = Router.make(
   "@unitflow/example/router-basic/router",
   Router.group(HomeRoute, UsersRoute, UserRoute),
 );

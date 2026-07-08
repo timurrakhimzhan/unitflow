@@ -840,8 +840,8 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
   routeGroup: Group,
   options: RouterOptions = {},
 ): {
-  readonly model: RouterModel<Id, Group> & RouterTargets<Id, Group>;
-  readonly routes: RouteModel<Id, Group>;
+  readonly NavigationModel: RouterModel<Id, Group> & RouterTargets<Id, Group>;
+  readonly RouteModel: RouteModel<Id, Group>;
 } => {
   // The `routes` model's per-key claim — `Model.get(router.routes, K)`
   // returns THE route with id K — is only sound if ids are unique: the unit
@@ -909,7 +909,7 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
       Effect.flatMap(getController(router), (api) => api.buildHrefEffect(options as never)),
   } as never) as RouterModel<Id, Group> & RouterTargets<Id, Group>;
 
-  return { model, routes };
+  return { NavigationModel: model, RouteModel: routes };
 };
 
 /** INTERNAL (used by RouterView): the pages model — one singleton owning

@@ -15,7 +15,7 @@ export const HomeRoute = Router.route("home", { path: "/" });
 export const LoginRoute = Router.route("login", { path: "/login" });
 export const AdminRoute = Router.route("admin", { path: "/admin" });
 
-export const { model: NavigationModel } = Router.make(
+export const { NavigationModel } = Router.make(
   "@unitflow/example/router-guard/router",
   Router.group(HomeRoute, LoginRoute).merge(
     Router.group(AdminRoute).middleware(AuthGuard),

@@ -38,7 +38,7 @@ const makeRouter = () => Router.make(`/test/router/${++nextRouter}`, routeGroup)
 const testEnv = (initial = "/") =>
   Layer.mergeAll(Registry.layer, Router.memoryHistoryLayer({ initialEntries: [initial] }));
 
-const { model: PageQueryRouter, routes: PageQueryRoutes } = Router.make(
+const { NavigationModel: PageQueryRouter, RouteModel: PageQueryRoutes } = Router.make(
   "/test/router/page-query",
   routeGroup,
 );
@@ -94,7 +94,7 @@ class UserRouteQueryModel extends Model.Service<UserRouteQueryModel>()(
 
 describe("@unitflow/router", () => {
   it.effect("matches routes and decodes params/search through the navigate event", () => {
-    const { model: AppRouter } = makeRouter();
+    const { NavigationModel: AppRouter } = makeRouter();
     return Effect.gen(function* () {
       const router = yield* Model.get(AppRouter);
 
@@ -119,7 +119,7 @@ describe("@unitflow/router", () => {
   });
 
   it.effect("builds prefixed group links through Effect dependency injection", () => {
-    const { model: AppRouter } = makeRouter();
+    const { NavigationModel: AppRouter } = makeRouter();
     return Effect.gen(function* () {
       const href = yield* AppRouter.buildHref({ to: "/admin/settings" });
       assert.strictEqual(href, "/admin/settings");
@@ -127,7 +127,7 @@ describe("@unitflow/router", () => {
   });
 
   it.effect("exposes navigation as model ports", () => {
-    const { model: AppRouter } = makeRouter();
+    const { NavigationModel: AppRouter } = makeRouter();
     return Effect.gen(function* () {
       const router = yield* Model.get(AppRouter);
 
@@ -269,7 +269,7 @@ describe("@unitflow/router", () => {
     const guardedGroup = Router.group(OpenRoute).merge(
       Router.group(AdminRoute).middleware(AdminGuard),
     );
-    const { model: GuardedRouter, routes: GuardedRoutes } = Router.make(
+    const { NavigationModel: GuardedRouter, RouteModel: GuardedRoutes } = Router.make(
       "/test/router/guarded",
       guardedGroup,
     );
@@ -474,8 +474,8 @@ describe("@unitflow/router", () => {
   });
 
   it("types route params, search, and model-bound links", () => {
-    const { model: TypedRouter } = makeRouter();
-    const { model: OtherRouter } = Router.make("/test/router/other", routeGroup);
+    const { NavigationModel: TypedRouter } = makeRouter();
+    const { NavigationModel: OtherRouter } = Router.make("/test/router/other", routeGroup);
     const bound = undefined as unknown as BoundRouter<typeof TypedRouter>;
 
     const hrefEffect: Effect.Effect<string, unknown, any> = TypedRouter.buildHref({
