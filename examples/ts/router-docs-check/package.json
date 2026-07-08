@@ -1,0 +1,22 @@
+{
+  "name": "@unitflow/example-router-docs",
+  "private": true,
+  "type": "module",
+  "description": "Compile-checked code snippets for the router documentation.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@unitflow/core": "workspace:*",
+    "@unitflow/react": "workspace:*",
+    "@unitflow/router": "workspace:*",
+    "effect": "4.0.0-beta.88",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "6.0.3"
+  }
+}

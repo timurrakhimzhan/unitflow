@@ -54,6 +54,15 @@ export default defineConfig({
           ],
         },
         {
+          label: "Router",
+          items: [
+            { slug: "router/routes" },
+            { slug: "router/models" },
+            { slug: "router/react" },
+            { slug: "router/middleware" },
+          ],
+        },
+        {
           label: "Advanced",
           items: [
             { slug: "streams" },
