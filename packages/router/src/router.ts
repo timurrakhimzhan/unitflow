@@ -192,17 +192,28 @@ export type ProvidesOf<M> = M extends { readonly "~provides": infer P } ? P : ne
 /**
  * Declares a middleware as a Context service — a TAG, not a function — so
  * the router only ever requires the tag: the implementation (and ITS
- * dependencies) live in the layer `make` builds, composed at the feature
+ * dependencies) live in the layer `layer` builds, composed at the feature
  * level. Attaching an inline function instead would leak every guard's
  * services into the router's own requirements.
  *
+ * `MiddlewareHandler` has no requirements channel — a guard reading live
+ * Unitflow state (`Store.get`, `Model.get`, ...) needs SOME services on
+ * every call, not just once. `layer` resolves the handler's services once at
+ * layer build and captures them, so the stored handler stays dependency-free
+ * while still running fresh Effect code (reactive reads included) per call:
+ *
  * ```ts
  * class AuthGuard extends Router.Middleware<AuthGuard>()("app/AuthGuard") {}
- * const AuthGuardLive = AuthGuard.make((ctx) => Effect.gen(function* () {
- *   const session = yield* SessionService;
- *   if (!session.canAccess) return yield* Effect.fail(Router.RedirectError({ to: "/login" }));
+ * const AuthGuardLive = AuthGuard.layer((ctx) => Effect.gen(function* () {
+ *   const session = yield* Model.get(SessionModel);
+ *   const user = yield* Store.get(session.outputs.user); // read fresh, every navigation
+ *   if (Option.isNone(user)) return yield* Effect.fail(new Router.RedirectError({ options: { to: "/login" } }));
  * }));
  * ```
+ *
+ * For a guard with no per-call reactive reads, a plain `Layer.effect(Tag, ...)`
+ * works too — `layer` only earns its keep once the handler needs to see
+ * fresh state on every navigation, not just what was true at layer build.
  */
 export interface MiddlewareClass<Self, Id extends string, Provides = void>
   extends Context.ServiceClass<Self, Id, MiddlewareHandler<Provides>> {
@@ -211,7 +222,7 @@ export interface MiddlewareClass<Self, Id extends string, Provides = void>
   /** Builds the implementation layer. The handler's services are resolved
    * once at layer build and captured, so the stored handler itself is
    * dependency-free — the router only ever requires the tag. */
-  readonly make: <R = never>(
+  readonly layer: <R = never>(
     handler: (
       context: MiddlewareContext,
     ) => Effect.Effect<Provides, RedirectError | NotFoundError, R>,
@@ -224,7 +235,7 @@ export const Middleware =
   <Provides = void>(): MiddlewareClass<Self, Id, Provides> => {
     const Service = Context.Service<Self, MiddlewareHandler<Provides>>()(id);
     return class extends Service {
-      static readonly make = <R = never>(
+      static readonly layer = <R = never>(
         handler: (
           context: MiddlewareContext,
         ) => Effect.Effect<Provides, RedirectError | NotFoundError, R>,

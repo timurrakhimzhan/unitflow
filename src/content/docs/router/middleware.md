@@ -40,12 +40,16 @@ export class AuthGuard extends Router.Middleware<AuthGuard>()("docs/AuthGuard")<
 
 ## Implementing It
 
-`make` builds the implementation layer. The handler's own services are
-resolved once at layer build; failing with `RedirectError` (or
-`NotFoundError`) cancels the navigation.
+`layer` builds the implementation layer. `MiddlewareHandler` has no
+requirements channel — a guard reading live state (`Store.get`, `Model.get`)
+needs services on every call, not just once — so `layer` resolves the
+handler's own services once at layer build and captures them, keeping the
+stored handler dependency-free while it still runs fresh Effect code per
+call. Failing with `RedirectError` (or `NotFoundError`) cancels the
+navigation.
 
 ```ts
-export const AuthGuardLive = AuthGuard.make((context) =>
+export const AuthGuardLive = AuthGuard.layer((context) =>
   Effect.gen(function* () {
     const session = yield* SessionService; // the GUARD's dependency, not the router's
     const user = yield* session.currentUser;
@@ -59,6 +63,10 @@ export const AuthGuardLive = AuthGuard.make((context) =>
   }),
 );
 ```
+
+For a guard with no per-call reactive reads, a plain `Layer.effect(Tag, ...)`
+works too — `layer` only earns its keep once the handler needs to see fresh
+state on every navigation, not just what was true when the layer built.
 
 Redirects also fire on the **initial load** and on browser back/forward: a
 direct deep link into a guarded URL lands on the redirect target, never on

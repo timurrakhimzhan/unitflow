@@ -31,7 +31,7 @@ declare module "@unitflow/router" {
 /** Runs BEFORE a navigation to /admin commits: no session — redirect, the
  * blocked URL never flashes. On success the returned value lands in the
  * route unit's `provided` port and in `match.provided`, typed. */
-export const AuthGuardLive = AuthGuard.make((context) =>
+export const AuthGuardLive = AuthGuard.layer((context) =>
   Effect.gen(function* () {
     const session = yield* Model.get(SessionModel);
     const user = yield* Store.get(session.outputs.user);

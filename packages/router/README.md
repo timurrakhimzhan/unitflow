@@ -114,7 +114,7 @@ class AuthGuard extends Router.Middleware<AuthGuard>()("app/AuthGuard")<{
   readonly user: User;
 }>() {}
 
-const AuthGuardLive = AuthGuard.make((ctx) =>
+const AuthGuardLive = AuthGuard.layer((ctx) =>
   Effect.gen(function* () {
     const session = yield* SessionService; // the GUARD's dependency, not the router's
     if (Option.isNone(session.user)) {

@@ -21,7 +21,7 @@ export class AuthGuard extends Router.Middleware<AuthGuard>()("docs/AuthGuard")<
 // #endregion declare
 
 // #region implement
-export const AuthGuardLive = AuthGuard.make((context) =>
+export const AuthGuardLive = AuthGuard.layer((context) =>
   Effect.gen(function* () {
     const session = yield* SessionService; // the GUARD's dependency, not the router's
     const user = yield* session.currentUser;

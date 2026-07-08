@@ -275,7 +275,7 @@ describe("@unitflow/router", () => {
     );
 
     let user: string | undefined = undefined;
-    const guardLayer = AdminGuard.make((context) =>
+    const guardLayer = AdminGuard.layer((context) =>
       Effect.gen(function* () {
         const gate = yield* Gate;
         const current = gate.currentUser();
