@@ -155,9 +155,14 @@ export const make = <R, ER>(layer: Layer.Layer<R, ER, Registry>): UnitflowRuntim
     // eslint-disable-next-line revizo/no-type-assertion
     const keyArgs = [key] as Model.KeyArgs<Model.KeyOf<M>>;
     // The model's service identifier cannot be tied to the runtime's `R`
-    // statically — the runtime layer must include the model's layer.
+    // statically — the runtime layer must include the model's layer — and
+    // `PortsFor` cannot resolve for an unresolved generic `M`, so the cast
+    // goes through `unknown`.
     // eslint-disable-next-line revizo/no-type-assertion
-    const load = Model.get(model, ...keyArgs) as Effect.Effect<Model.PortsOf<M>, Model.ErrorOf<M>>;
+    const load = Model.get(model, ...keyArgs) as unknown as Effect.Effect<
+      Model.PortsOf<M>,
+      Model.ErrorOf<M>
+    >;
     runtime.runFork(
       load.pipe(
         Scope.provide(bindingScope),

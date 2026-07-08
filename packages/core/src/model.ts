@@ -221,11 +221,47 @@ type KeyedService<
   Effect.Services<ReturnType<Make>>
 >;
 
+/**
+ * A keyed service carrying a per-key shape map: `Model.get` resolves the key
+ * literal against `modelShapes` to return that key's narrower ports. A
+ * dedicated interface (not an intersection on {@link KeyedService}) because
+ * class statics only inherit properties declared on the base expression's
+ * interface — an intersection member would be silently dropped.
+ */
+export interface KeyedShapeService<
+  Self,
+  Id extends string,
+  Key,
+  Shapes extends Record<PropertyKey, Shape>,
+  Make extends (key: Key) => AnyEffect,
+> extends ServiceClass<
+    Self,
+    Id,
+    Key,
+    Effect.Success<ReturnType<Make>>,
+    Effect.Error<ReturnType<Make>>,
+    Effect.Services<ReturnType<Make>>
+  > {
+  /** Type-level only: never materialized at runtime. */
+  readonly modelShapes: Shapes;
+}
+
 export interface Builder<Self, Id extends string> {
   <Make extends () => AnyEffect>(options: SingletonOptions<Make>): SingletonService<Self, Id, Make>;
-  <Key>(): <Make extends (key: Key) => AnyEffect>(
+  /**
+   * Keyed models. The optional `Shapes` argument declares a per-key shape
+   * map (`{ [K in Key]: Shape }`): `Model.get(model, "k")` then returns the
+   * ports of `Shapes["k"]` instead of the model-wide shape. The map is a
+   * declaration, not a proof — `make` must actually build the narrower
+   * shape it claims for each key.
+   */
+  <Key, Shapes extends { readonly [K in Key & PropertyKey]: Shape } = never>(): <
+    Make extends (key: Key) => AnyEffect,
+  >(
     options: KeyedOptions<Key, Make>,
-  ) => KeyedService<Self, Id, Key, Make>;
+  ) => [Shapes] extends [never]
+    ? KeyedService<Self, Id, Key, Make>
+    : KeyedShapeService<Self, Id, Key, Shapes, Make>;
 }
 
 export type KeyOf<M extends AnyService> = ReturnType<M["modelType"]["key"]>;
@@ -273,6 +309,32 @@ export type Ports<A extends Shape> = {
 };
 
 export type PortsOf<M extends AnyService> = Ports<ShapeOf<M>>;
+
+/**
+ * The per-key shape map of a keyed model, when it declares one: each key
+ * literal maps to the (narrower) shape that key's instance exposes. Declared
+ * via the second type argument of the keyed builder —
+ * `Model.Service<Self>()(id)<Key, Shapes>()` — and carried as a type-level
+ * `modelShapes` marker; `never` for models without one.
+ */
+export type ShapesOf<M> = M extends { readonly modelShapes: infer S } ? S : never;
+
+/**
+ * The ports `Model.get` returns for a concrete key argument: models with a
+ * per-key shape map resolve the key literal against it, everything else
+ * falls back to the model-wide {@link PortsOf}. The map entry is validated
+ * here (`extends Shape`) rather than constraining the `infer` in
+ * {@link ShapesOf}: interface-declared maps have no implicit index
+ * signature, so a `Record<PropertyKey, Shape>` bound would silently reject
+ * them.
+ */
+export type PortsFor<M extends AnyService, K> = [ShapesOf<M>] extends [never]
+  ? PortsOf<M>
+  : K extends keyof ShapesOf<M>
+    ? ShapesOf<M>[K] extends Shape
+      ? Ports<ShapesOf<M>[K]>
+      : PortsOf<M>
+    : PortsOf<M>;
 
 export type ListItem<M extends AnyService> = PortsOf<M> & {
   readonly key: KeyInput<KeyOf<M>>;
@@ -498,16 +560,16 @@ export const Service =
  * scope when no ambient scope exists). The instance is shared by all holders
  * and constructed once; when the last lease is released, the model's
  * `lifetime` policy decides how long it survives before disposal. */
-export const get = <M extends AnyService>(
+export const get = <M extends AnyService, const Args extends KeyArgs<KeyOf<M>>>(
   model: M,
-  ...args: KeyArgs<KeyOf<M>>
-): Effect.Effect<PortsOf<M>, ErrorOf<M>, Context.Service.Identifier<M>> =>
+  ...args: Args
+): Effect.Effect<PortsFor<M, Args[0]>, ErrorOf<M>, Context.Service.Identifier<M>> =>
   // Narrowing the shape to capability ports is a type-level operation over
   // the same runtime value; TypeScript cannot reduce `Ports<A>` for an
   // unresolved generic `A`, hence the one boundary cast.
   // eslint-disable-next-line revizo/no-type-assertion
   Effect.flatMap(model, (accessor) => accessor.get(...args)) as Effect.Effect<
-    PortsOf<M>,
+    PortsFor<M, Args[0]>,
     ErrorOf<M>,
     Context.Service.Identifier<M>
   >;

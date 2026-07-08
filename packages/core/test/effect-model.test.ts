@@ -1015,15 +1015,24 @@ describe("Unitflow", () => {
     assert.isDefined(DataExtraModel);
   });
 
-  it("keeps the three base sections required (type-level)", () => {
-    class MissingUiModel extends Model.Service<MissingUiModel>()(
-      "/test/test/MissingUiModel",
+  it("allows headless models: `ui` is optional, inputs/outputs are not (type-level)", () => {
+    // Headless models (inputs/outputs only) are a first-class shape — the
+    // `ui` section only gates View binding (see Model.Viewable).
+    class HeadlessModel extends Model.Service<HeadlessModel>()(
+      "/test/test/HeadlessModel",
     )({
-      // @ts-expect-error `ui` is required even when empty — extras never replace the base three
       make: () => Effect.sync(() => ({ inputs: {}, outputs: {} })),
     }) {}
 
-    assert.isDefined(MissingUiModel);
+    class MissingOutputsModel extends Model.Service<MissingOutputsModel>()(
+      "/test/test/MissingOutputsModel",
+    )({
+      // @ts-expect-error `outputs` is one of the required base sections
+      make: () => Effect.sync(() => ({ inputs: {} })),
+    }) {}
+
+    assert.isDefined(HeadlessModel);
+    assert.isDefined(MissingOutputsModel);
   });
 
   it("descriptors are pipeable", () => {
