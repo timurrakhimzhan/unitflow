@@ -7,6 +7,7 @@ import * as React from "react";
 import * as Schema from "effect/Schema";
 import { Event, Model, Registry, Query, Store } from "@unitflow/core";
 import { Router, RouterGroup } from "../src/index.js";
+import { makePages } from "../src/router.js";
 import * as RouterReact from "../src/react.js";
 import { Link, type BoundRouter, type RouteComponent } from "../src/react.js";
 
@@ -37,7 +38,10 @@ const makeRouter = () => Router.make(`/test/router/${++nextRouter}`, routeGroup)
 const testEnv = (initial = "/") =>
   Layer.mergeAll(Registry.layer, Router.memoryHistoryLayer({ initialEntries: [initial] }));
 
-const PageQueryRouter = Router.make("/test/router/page-query", routeGroup);
+const { model: PageQueryRouter, routes: PageQueryRoutes } = Router.make(
+  "/test/router/page-query",
+  routeGroup,
+);
 
 // Registering the app router types RedirectError targets exactly like
 // navigate options (unregistered apps stay lenient).
@@ -63,7 +67,7 @@ class UserRouteQueryModel extends Model.Service<UserRouteQueryModel>()(
 )({
   make: () =>
     Effect.gen(function* () {
-      const userRoute = yield* Model.get(PageQueryRouter.routes, "user");
+      const userRoute = yield* Model.get(PageQueryRoutes, "user");
       const user = yield* Query.make({
         stores: { params: userRoute.outputs.params },
         handler: ({ params }) =>
@@ -90,7 +94,7 @@ class UserRouteQueryModel extends Model.Service<UserRouteQueryModel>()(
 
 describe("@unitflow/router", () => {
   it.effect("matches routes and decodes params/search through the navigate event", () => {
-    const AppRouter = makeRouter();
+    const { model: AppRouter } = makeRouter();
     return Effect.gen(function* () {
       const router = yield* Model.get(AppRouter);
 
@@ -115,7 +119,7 @@ describe("@unitflow/router", () => {
   });
 
   it.effect("builds prefixed group links through Effect dependency injection", () => {
-    const AppRouter = makeRouter();
+    const { model: AppRouter } = makeRouter();
     return Effect.gen(function* () {
       const href = yield* AppRouter.buildHref({ to: "/admin/settings" });
       assert.strictEqual(href, "/admin/settings");
@@ -123,7 +127,7 @@ describe("@unitflow/router", () => {
   });
 
   it.effect("exposes navigation as model ports", () => {
-    const AppRouter = makeRouter();
+    const { model: AppRouter } = makeRouter();
     return Effect.gen(function* () {
       const router = yield* Model.get(AppRouter);
 
@@ -146,11 +150,14 @@ describe("@unitflow/router", () => {
   });
 
   it.effect("exposes every route as a keyed unit with typed ports", () => {
-    const testLayer = PageQueryRouter.layer.pipe(Layer.provideMerge(testEnv()));
+    const testLayer = PageQueryRoutes.layer.pipe(
+      Layer.provideMerge(PageQueryRouter.layer),
+      Layer.provideMerge(testEnv()),
+    );
 
     return Effect.gen(function* () {
       const router = yield* Model.get(PageQueryRouter);
-      const userRoute = yield* Model.get(PageQueryRouter.routes, "user");
+      const userRoute = yield* Model.get(PageQueryRoutes, "user");
 
       assert.isFalse(yield* Store.get(userRoute.outputs.opened));
       assert.isTrue(Option.isNone(yield* Store.get(userRoute.outputs.params)));
@@ -183,7 +190,7 @@ describe("@unitflow/router", () => {
         // @ts-expect-error the "user" route has no "missing" param
         Store.get(userRoute.outputs.params).pipe(Effect.map(Option.map((p) => p.missing)));
         // @ts-expect-error route ids are constrained to the declared union
-        void Model.get(PageQueryRouter.routes, "unknown");
+        void Model.get(PageQueryRoutes, "unknown");
       }
 
       yield* Registry.allSettled(
@@ -206,6 +213,7 @@ describe("@unitflow/router", () => {
     });
 
     const testLayer = UserRouteQueryModel.layer.pipe(
+      Layer.provideMerge(PageQueryRoutes.layer),
       Layer.provideMerge(PageQueryRouter.layer),
       Layer.provideMerge(Layer.succeed(UserEndpoint, endpoint)),
       Layer.provideMerge(testEnv()),
@@ -261,7 +269,10 @@ describe("@unitflow/router", () => {
     const guardedGroup = Router.group(OpenRoute).merge(
       Router.group(AdminRoute).middleware(AdminGuard),
     );
-    const GuardedRouter = Router.make("/test/router/guarded", guardedGroup);
+    const { model: GuardedRouter, routes: GuardedRoutes } = Router.make(
+      "/test/router/guarded",
+      guardedGroup,
+    );
 
     let user: string | undefined = undefined;
     const guardLayer = AdminGuard.make((context) =>
@@ -278,7 +289,8 @@ describe("@unitflow/router", () => {
       }),
     );
 
-    const testLayer = GuardedRouter.layer.pipe(
+    const testLayer = GuardedRoutes.layer.pipe(
+      Layer.provideMerge(GuardedRouter.layer),
       Layer.provideMerge(guardLayer),
       Layer.provideMerge(Layer.succeed(Gate, Gate.of({ currentUser: () => user }))),
       Layer.provideMerge(testEnv()),
@@ -286,7 +298,7 @@ describe("@unitflow/router", () => {
 
     return Effect.gen(function* () {
       const router = yield* Model.get(GuardedRouter);
-      const adminRoute = yield* Model.get(GuardedRouter.routes, "admin");
+      const adminRoute = yield* Model.get(GuardedRoutes, "admin");
 
       // Blocked: the redirect fires BEFORE commit — /admin never reaches
       // history or state, no URL flash.
@@ -394,7 +406,7 @@ describe("@unitflow/router", () => {
     class UserPage extends Model.Service<UserPage>()("/test/router/pages/UserPage")({
       make: () =>
         Effect.gen(function* () {
-          const unit = yield* Model.get(PageQueryRouter.routes, "user");
+          const unit = yield* Model.get(PageQueryRoutes, "user");
           const label = Store.combine([unit.outputs.params], (params) =>
             Option.match(params, {
               onNone: () => "closed",
@@ -405,10 +417,11 @@ describe("@unitflow/router", () => {
         }),
     }) {}
 
-    const AppPages = PageQueryRouter.pages({ user: UserPage });
+    const AppPages = makePages(PageQueryRouter, { user: UserPage });
 
     const testLayer = AppPages.layer.pipe(
       Layer.provideMerge(UserPage.layer),
+      Layer.provideMerge(PageQueryRoutes.layer),
       Layer.provideMerge(PageQueryRouter.layer),
       Layer.provideMerge(testEnv()),
     );
@@ -461,8 +474,8 @@ describe("@unitflow/router", () => {
   });
 
   it("types route params, search, and model-bound links", () => {
-    const TypedRouter = makeRouter();
-    const OtherRouter = Router.make("/test/router/other", routeGroup);
+    const { model: TypedRouter } = makeRouter();
+    const { model: OtherRouter } = Router.make("/test/router/other", routeGroup);
     const bound = undefined as unknown as BoundRouter<typeof TypedRouter>;
 
     const hrefEffect: Effect.Effect<string, unknown, any> = TypedRouter.buildHref({

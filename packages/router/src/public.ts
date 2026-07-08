@@ -84,6 +84,7 @@ export type {
   AnyRouter,
   RegisteredRouter,
   RouterGroupOf,
+  RouterIdOf,
   RouterRoutes,
   RoutePath,
   RouteByPath,

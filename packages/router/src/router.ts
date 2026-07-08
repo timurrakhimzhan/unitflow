@@ -704,22 +704,6 @@ export interface RouterModel<
     RouterServicesForGroup<Group> | History | Registry
   > {
   readonly group: Group;
-  /** One `Model.get(router.routes, "<id>")` away from a route's typed unit:
-   * `outputs.opened`/`params`/`search`, narrowed to that id. */
-  readonly routes: RoutesModel<Id, Group>;
-  /** Creates the pages model for this router: one singleton owning the
-   * router and every mapped page model — the view tree's root. Call it ONCE
-   * per router, after the page models are declared. */
-  readonly pages: <const Pages extends PageMap<Group>>(
-    pages: Pages,
-  ) => PagesModel<Id, Group, Pages>;
-  /** Provides BOTH services: the router itself and its `routes` model.
-   * Requires the {@link History} capability. */
-  readonly layer: Layer.Layer<
-    RouterModel<Id, Group> | RoutesModel<Id, Group>,
-    never,
-    Exclude<RouterServicesForGroup<Group>, Registry> | History | Registry
-  >;
   readonly options: RouterOptions;
   readonly routerType: {
     readonly id: Id;
@@ -754,6 +738,7 @@ export type MatchUnion<TRouter> = RouterRoutes<TRouter> extends infer R
     : never
   : never;
 export type RouterControllerOf<M extends AnyRouter> = RouterController<RouterGroupOf<M>>;
+export type RouterIdOf<TRouter> = TRouter extends RouterModel<infer Id, any> ? Id : never;
 
 type PathParamsFor<TRouter, To> = Route.ParamsInput<RouteByPath<TRouter, To>>;
 type SearchInputFor<TRouter, To> = Route.SearchInput<RouteByPath<TRouter, To>>;
@@ -854,7 +839,10 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
   id: Id,
   routeGroup: Group,
   options: RouterOptions = {},
-): RouterModel<Id, Group> & RouterTargets<Id, Group> => {
+): {
+  readonly model: RouterModel<Id, Group> & RouterTargets<Id, Group>;
+  readonly routes: RoutesModel<Id, Group>;
+} => {
   // The `routes` model's per-key claim — `Model.get(router.routes, K)`
   // returns THE route with id K — is only sound if ids are unique: the unit
   // resolves its route by `find(route.id === key)`. Enforce the
@@ -914,42 +902,44 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
   });
   const routes = routesService as unknown as RoutesModel<Id, Group>;
 
-  const pages = <const Pages extends PageMap<Group>>(
-    pageMap: Pages,
-  ): PagesModel<Id, Group, Pages> => {
-    const pagesService = Model.Service<PagesModel<Id, Group, Pages>>()(
-      `${id}/pages` as `${Id}/pages`,
-    )({
-      make: () =>
-        Effect.gen(function* () {
-          const routerPorts = yield* Model.get(router);
-          const ui: Record<string, unknown> = { router: routerPorts };
-          for (const [routeId, pageModel] of Object.entries(pageMap)) {
-            if (pageModel !== undefined) {
-              ui[routeId] = yield* Model.get(pageModel as Model.AnyService);
-            }
-          }
-          return { inputs: {}, outputs: {}, ui } as never;
-        }),
-    });
-    return Object.assign(pagesService, { router: assembled }) as unknown as PagesModel<
-      Id,
-      Group,
-      Pages
-    >;
-  };
-
-  const assembled = Object.assign(router, {
-    routes,
-    pages,
-    layer: routes.layer.pipe(Layer.provideMerge(router.layer)),
+  const model = Object.assign(router, {
     buildLocation: (options: ToOptions<RouterController<Group>, RoutePath<RouterController<Group>>>) =>
       Effect.flatMap(getController(router), (api) => api.buildLocationEffect(options as never)),
     buildHref: (options: ToOptions<RouterController<Group>, RoutePath<RouterController<Group>>>) =>
       Effect.flatMap(getController(router), (api) => api.buildHrefEffect(options as never)),
   } as never) as RouterModel<Id, Group> & RouterTargets<Id, Group>;
 
-  return assembled;
+  return { model, routes };
+};
+
+/** INTERNAL (used by RouterView): the pages model — one singleton owning
+ * the router and every mapped page model, the view tree's root. */
+export const makePages = <M extends AnyRouter, const Pages extends PageMap<RouterGroupOf<M>>>(
+  model: M,
+  pageMap: Pages,
+): PagesModel<RouterIdOf<M>, RouterGroupOf<M>, Pages> => {
+  const pagesService = Model.Service<PagesModel<RouterIdOf<M>, RouterGroupOf<M>, Pages>>()(
+    `${model.modelKey}/pages` as `${RouterIdOf<M>}/pages`,
+  )({
+    make: () =>
+      Effect.gen(function* () {
+        // The engine is a singleton (void key); the erased generic hides that.
+        // eslint-disable-next-line revizo/no-type-assertion
+        const routerPorts = yield* Model.get(model as unknown as RouterModel);
+        const ui: Record<string, unknown> = { router: routerPorts };
+        for (const [routeId, pageModel] of Object.entries(pageMap)) {
+          if (pageModel !== undefined) {
+            ui[routeId] = yield* Model.get(pageModel as Model.AnyService);
+          }
+        }
+        return { inputs: {}, outputs: {}, ui } as never;
+      }),
+  });
+  return Object.assign(pagesService, { router: model }) as unknown as PagesModel<
+    RouterIdOf<M>,
+    RouterGroupOf<M>,
+    Pages
+  >;
 };
 
 const makeShape = <Group extends AnyRouteGroup>(

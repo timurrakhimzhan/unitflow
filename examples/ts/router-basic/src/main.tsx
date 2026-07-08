@@ -6,13 +6,14 @@ import { Unitflow, UnitflowRuntime } from "@unitflow/react";
 import { Router } from "@unitflow/router";
 import { usersApi, UsersApi } from "./api";
 import { AppView } from "./App";
-import { AppRouter, UserPageModel, UsersPageModel } from "./routes";
+import { AppRoutes, NavigationModel, UserPageModel, UsersPageModel } from "./routes";
 import "./styles.css";
 
 const layer = AppView.model.layer.pipe(
   Layer.provideMerge(UsersPageModel.layer),
   Layer.provideMerge(UserPageModel.layer),
-  Layer.provideMerge(AppRouter.layer),
+  Layer.provideMerge(AppRoutes.layer),
+  Layer.provideMerge(NavigationModel.layer),
   Layer.provideMerge(Router.browserHistoryLayer),
   Layer.provideMerge(Layer.succeed(UsersApi, usersApi)),
 );

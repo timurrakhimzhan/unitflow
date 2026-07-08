@@ -3,7 +3,7 @@ import * as Option from "effect/Option";
 import { View } from "@unitflow/react";
 import { Link, RouterView } from "@unitflow/router/react";
 import type { User } from "./api";
-import { AppRouter, UserPageModel, UsersPageModel } from "./routes";
+import { NavigationModel, UserPageModel, UsersPageModel } from "./routes";
 
 const Pending = () => <div className="state">Loading…</div>;
 
@@ -65,7 +65,7 @@ const UserPage = View.make(UserPageModel, ({ user, params, search }) => {
 /** ONE map stitches routes, models, and views: a plain function is a view
  * (with its route's narrowed `match`), a View.make component IS its own
  * entry — the router leases its model and hands the unit back in. */
-export const AppView = RouterView.make(AppRouter, {
+export const AppView = RouterView.make(NavigationModel, {
   routes: {
     home: ({ children }) => (
       <main className="shell">

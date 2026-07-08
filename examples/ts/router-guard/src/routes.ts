@@ -15,7 +15,7 @@ export const HomeRoute = Router.route("home", { path: "/" });
 export const LoginRoute = Router.route("login", { path: "/login" });
 export const AdminRoute = Router.route("admin", { path: "/admin" });
 
-export const AppRouter = Router.make(
+export const { model: NavigationModel } = Router.make(
   "@unitflow/example/router-guard/router",
   Router.group(HomeRoute, LoginRoute).merge(
     Router.group(AdminRoute).middleware(AuthGuard),
@@ -24,7 +24,7 @@ export const AppRouter = Router.make(
 
 declare module "@unitflow/router" {
   interface Register {
-    readonly router: typeof AppRouter;
+    readonly router: typeof NavigationModel;
   }
 }
 

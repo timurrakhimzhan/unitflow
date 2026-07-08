@@ -53,7 +53,7 @@ type RouteById<M extends Router.AnyRouter, Id> = Extract<
   { readonly id: Id }
 >;
 
-type RouterIdOf<M> = M extends Router.RouterModel<infer Id, any> ? Id : never;
+
 
 /**
  * The one place a router meets rendering: a route only declares `model` (or
@@ -130,7 +130,7 @@ export type RouterViewComponent<M extends Router.AnyRouter, Units> = React.FC<
   /** The root model for this view tree: owns the router and every page
    * model stitched into the views map. */
   readonly model: Router.PagesModel<
-    RouterIdOf<M>,
+    Router.RouterIdOf<M>,
     Router.RouterGroupOf<M>,
     Router.PageMap<Router.RouterGroupOf<M>>
   >;
@@ -148,7 +148,7 @@ const makeRouterView = <M extends Router.AnyRouter, Units = void>(
       pageModels[routeId] = (entry as ModelViewEntry).model;
     }
   }
-  const pagesModel = router.pages(pageModels as never);
+  const pagesModel = Router.makePages(router, pageModels as never);
 
   const Bound = UnitView.make(
     // The pages model carries its router value (typed opaquely — cycle

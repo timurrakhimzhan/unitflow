@@ -3,7 +3,7 @@ import * as React from "react";
 import * as Effect from "effect/Effect";
 import { Model, useEvent, useStore, View } from "@unitflow/react";
 import { Link, RouterView } from "@unitflow/router/react";
-import { AppRouter } from "./routes";
+import { NavigationModel } from "./routes";
 import { SessionModel } from "./session";
 
 interface PageUnits {
@@ -47,7 +47,7 @@ const LoginForm = ({
   );
 };
 
-export const AppView = RouterView.make<typeof AppRouter, PageUnits>(AppRouter, {
+export const AppView = RouterView.make<typeof NavigationModel, PageUnits>(NavigationModel, {
   routes: {
     home: ({ units, children }) => (
       <main className="shell">
