@@ -86,5 +86,6 @@ export type {
   MatchByPath,
   MatchUnion,
   ToOptions,
+  TargetOptions,
   NavigateOptions,
 } from "./router.js";
