@@ -45,3 +45,7 @@ export const AuthGuardLive = AuthGuard.make((context) =>
     return { user: user.value };
   }),
 );
+
+/** No route models in this example — the map is empty, but AppPages still
+ * owns the router unit and roots the view tree. */
+export const AppPages = AppRouter.pages({});

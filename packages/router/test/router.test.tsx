@@ -390,6 +390,55 @@ describe("@unitflow/router", () => {
     assert.isTrue(shapesCoherent);
   });
 
+  it.effect("pages model owns the router unit and mapped page models", () => {
+    class UserPage extends Model.Service<UserPage>()("/test/router/pages/UserPage")({
+      make: () =>
+        Effect.gen(function* () {
+          const unit = yield* Model.get(PageQueryRouter.routes, "user");
+          const label = Store.combine([unit.outputs.params], (params) =>
+            Option.match(params, {
+              onNone: () => "closed",
+              onSome: ({ id }) => `user:${id}`,
+            }),
+          );
+          return { inputs: {}, outputs: { label }, ui: { label } };
+        }),
+    }) {}
+
+    const AppPages = PageQueryRouter.pages({ user: UserPage });
+
+    const testLayer = AppPages.layer.pipe(
+      Layer.provideMerge(UserPage.layer),
+      Layer.provideMerge(PageQueryRouter.layer),
+      Layer.provideMerge(testEnv()),
+    );
+
+    return Effect.gen(function* () {
+      const pages = yield* Model.get(AppPages);
+      const router = yield* Model.get(PageQueryRouter);
+
+      // The page unit arrives typed through the map: label is Store<string>.
+      const closed: string = yield* Store.get(pages.ui.user.ui.label);
+      assert.strictEqual(closed, "closed");
+
+      yield* Registry.allSettled(
+        Event.emit(router.inputs.navigate, {
+          to: "/users/:id",
+          params: { id: 9 },
+          search: { page: 1 },
+        }),
+      );
+
+      assert.strictEqual(yield* Store.get(pages.ui.user.ui.label), "user:9");
+      if (false) {
+        // @ts-expect-error only mapped route ids appear on pages.ui
+        pages.ui.settings;
+        // @ts-expect-error page map keys are constrained to route ids
+        PageQueryRouter.pages({ unknown: UserPage });
+      }
+    }).pipe(Effect.provide(testLayer));
+  });
+
   it("does not export router hooks", () => {
     assert.notProperty(RouterReact, "useRouter");
     assert.notProperty(RouterReact, "useRouterState");

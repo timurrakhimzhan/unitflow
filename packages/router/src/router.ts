@@ -1,5 +1,5 @@
 import { Event, Model, Store } from "@unitflow/core";
-import { Registry, trackPublish } from "@unitflow/core/registry";
+import { InstanceScope, Registry, trackPublish } from "@unitflow/core/registry";
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import { type Pipeable, pipeArguments } from "effect/Pipeable";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import type { ParseOptions } from "effect/SchemaAST";
 
 const RouteTypeId = Symbol.for("@unitflow/router/Route");
@@ -159,10 +160,6 @@ export interface RouteOptions<
     params: PathParams<Path>,
   ) => MaybeEffect<ParamsOutputOf<Path, ParamsSchema> | false, any, any>;
   readonly stringifyParams?: (params: ParamsInputOf<Path, ParamsSchema>) => PathParams<Path>;
-  /** The model backing this route's data/behavior. The router never
-   * constructs or reads it — it is a plain reference for application code
-   * (rendering, prefetching) to act on. */
-  readonly model?: Model.AnyService;
   readonly staticData?: SearchRecord;
   readonly meta?: (
     context: RouteContext<Path, ParamsOutputOf<Path, ParamsSchema>, SearchOutputOf<Search>>,
@@ -619,6 +616,66 @@ export type RouteShapes<Group extends AnyRouteGroup> = {
   readonly [Id in RouteIds<Group>]: RouteUnitShape<Extract<RoutesOf<Group>, { readonly id: Id }>>;
 };
 
+/** The page-model map handed to `router.pages(...)`: keys are the router's
+ * route ids (a typo will not compile), values are the page models. Declared
+ * AFTER the models — never on the route — because a route referencing its
+ * model while the model reads `router.routes` is a type-inference cycle. */
+export type PageMap<Group extends AnyRouteGroup> = {
+  readonly [Id in RouteIds<Group>]?: Model.AnyService;
+};
+
+type PageServicesOfMap<Pages> = {
+  [K in keyof Pages]: Pages[K] extends Model.AnyService
+    ? Context.Service.Identifier<Pages[K]>
+    : never;
+}[keyof Pages];
+
+/** The shape of a pages model: the router's own unit plus one unit per
+ * mapped page model. */
+export interface PagesShape<Pages> extends Model.Shape {
+  readonly inputs: Record<never, never>;
+  readonly outputs: Record<never, never>;
+  readonly ui: {
+    /** The router's own unit. Typed opaquely ON PURPOSE: naming the precise
+     * ports here closes a resolution cycle (PagesShape -> RouterShape ->
+     * NavigateOptions -> AnyRouter -> RouterModel). RouterView re-types it
+     * internally from the router value it already holds. */
+    readonly router: Model.UnitPorts;
+  } & {
+    // The UnitPorts intersection keeps the mapped entry inside the `ui`
+    // section's port contract even for erased (`any`) page maps.
+    readonly [K in keyof Pages as Pages[K] extends Model.AnyService
+      ? K & string
+      : never]: Pages[K] extends Model.AnyService
+      ? Model.PortsOf<Pages[K]> & Model.UnitPorts
+      : never;
+  };
+}
+
+/** The singleton `router.pages(map)` returns: leases the router and every
+ * mapped page model, republishing their units through `ui`. Owning them
+ * HERE (not inside route units) keeps construction acyclic — page models
+ * may freely read `router.routes` units. */
+export interface PagesModel<
+  Id extends string = string,
+  Group extends AnyRouteGroup = AnyRouteGroup,
+  Pages extends PageMap<Group> = PageMap<Group>,
+> extends Model.ServiceClass<
+    PagesModel<Id, Group, Pages>,
+    `${Id}/pages`,
+    void,
+    PagesShape<Pages>,
+    never,
+    RouterModel<Id, Group> | PageServicesOfMap<Pages> | Registry
+  > {
+  /** The router value this pages model was created from — RouterView binds
+   * its inner view through it. Typed opaquely (the precise type would close
+   * the ToOptions resolution cycle); RouterView re-types it internally. */
+  readonly router: Model.AnyService;
+}
+
+export type AnyPagesModel = PagesModel<any, any, any>;
+
 /** The keyed model behind `router.routes`: one unit per route id, derived
  * from the router's `outputs.matches`. */
 export interface RoutesModel<
@@ -650,9 +707,14 @@ export interface RouterModel<
   /** One `Model.get(router.routes, "<id>")` away from a route's typed unit:
    * `outputs.opened`/`params`/`search`, narrowed to that id. */
   readonly routes: RoutesModel<Id, Group>;
+  /** Creates the pages model for this router: one singleton owning the
+   * router and every mapped page model — the view tree's root. Call it ONCE
+   * per router, after the page models are declared. */
+  readonly pages: <const Pages extends PageMap<Group>>(
+    pages: Pages,
+  ) => PagesModel<Id, Group, Pages>;
   /** Provides BOTH services: the router itself and its `routes` model.
-   * Requires the {@link History} capability — provide
-   * `browserHistoryLayer`/`hashHistoryLayer`/`memoryHistoryLayer`. */
+   * Requires the {@link History} capability. */
   readonly layer: Layer.Layer<
     RouterModel<Id, Group> | RoutesModel<Id, Group>,
     never,
@@ -852,14 +914,42 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
   });
   const routes = routesService as unknown as RoutesModel<Id, Group>;
 
-  return Object.assign(router, {
+  const pages = <const Pages extends PageMap<Group>>(
+    pageMap: Pages,
+  ): PagesModel<Id, Group, Pages> => {
+    const pagesService = Model.Service<PagesModel<Id, Group, Pages>>()(
+      `${id}/pages` as `${Id}/pages`,
+    )({
+      make: () =>
+        Effect.gen(function* () {
+          const routerPorts = yield* Model.get(router);
+          const ui: Record<string, unknown> = { router: routerPorts };
+          for (const [routeId, pageModel] of Object.entries(pageMap)) {
+            if (pageModel !== undefined) {
+              ui[routeId] = yield* Model.get(pageModel as Model.AnyService);
+            }
+          }
+          return { inputs: {}, outputs: {}, ui } as never;
+        }),
+    });
+    return Object.assign(pagesService, { router: assembled }) as unknown as PagesModel<
+      Id,
+      Group,
+      Pages
+    >;
+  };
+
+  const assembled = Object.assign(router, {
     routes,
+    pages,
     layer: routes.layer.pipe(Layer.provideMerge(router.layer)),
     buildLocation: (options: ToOptions<RouterController<Group>, RoutePath<RouterController<Group>>>) =>
       Effect.flatMap(getController(router), (api) => api.buildLocationEffect(options as never)),
     buildHref: (options: ToOptions<RouterController<Group>, RoutePath<RouterController<Group>>>) =>
       Effect.flatMap(getController(router), (api) => api.buildHrefEffect(options as never)),
-  } as never);
+  } as never) as RouterModel<Id, Group> & RouterTargets<Id, Group>;
+
+  return assembled;
 };
 
 const makeShape = <Group extends AnyRouteGroup>(

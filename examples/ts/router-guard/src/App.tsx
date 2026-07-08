@@ -3,7 +3,7 @@ import * as React from "react";
 import { Model, useEvent, useStore, View } from "@unitflow/react";
 import { Link, RouterView } from "@unitflow/router/react";
 import { AppModel } from "./model";
-import { AppRouter } from "./routes";
+import { AppPages } from "./routes";
 import { SessionModel } from "./session";
 
 interface PageUnits {
@@ -47,7 +47,7 @@ const LoginForm = ({
   );
 };
 
-const Outlet = RouterView.make<typeof AppRouter, PageUnits>(AppRouter, {
+const Outlet = RouterView.make<typeof AppPages, PageUnits>(AppPages, {
   routes: {
     home: ({ units, children }) => (
       <main className="shell">
@@ -87,5 +87,5 @@ const Outlet = RouterView.make<typeof AppRouter, PageUnits>(AppRouter, {
 
 export const App: React.FC<{ readonly unit: Model.PortsOf<typeof AppModel> }> = View.make(
   AppModel,
-  ({ router, session }) => <Outlet unit={router} units={{ session }} />,
+  ({ pages, session }) => <Outlet unit={pages} units={{ session }} />,
 );

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { View as UnitView, type ViewProps } from "@unitflow/react";
+import { type Model, View as UnitView } from "@unitflow/react";
 import * as Router from "./router.js";
 
 type Controller<M extends Router.AnyRouter> = Router.RouterControllerOf<M>;
@@ -24,12 +24,15 @@ export type RouteComponent<
   M extends Router.AnyRouter = Router.RegisteredRouter,
   Match extends Router.RouteMatch = Router.MatchUnion<M>,
   Units = void,
+  Page = undefined,
 > = (props: {
   readonly router: BoundRouter<M>;
   readonly match: Match;
-  /** Child units the OWNING view passed through `RouterView`'s `units`
-   * prop — the model-first way for a route view to reach its page model:
-   * the parent leases and republishes, the view only receives. */
+  /** The unit of this route's declared `model:` — leased by `router.pages`,
+   * handed here automatically. `undefined` for routes without a model. */
+  readonly page: Page;
+  /** Extra units the OWNING view passed through `RouterView`'s `units`
+   * prop — for anything that is not a route's page model. */
   readonly units: Units;
   readonly children: React.ReactNode;
 }) => React.ReactNode;
@@ -45,6 +48,18 @@ type RouteById<M extends Router.AnyRouter, Id> = Extract<
   { readonly id: Id }
 >;
 
+type PageUnitOf<Pages, Id> = Id extends keyof Pages
+  ? Pages[Id] extends Model.AnyService
+    ? Model.PortsOf<Pages[Id]>
+    : undefined
+  : undefined;
+
+type PagesRouterOf<P> = P extends Router.PagesModel<infer Id, infer Group, any>
+  ? Router.RouterModel<Id, Group>
+  : never;
+
+type PagesMapOf<P> = P extends Router.PagesModel<any, any, infer Pages> ? Pages : never;
+
 /**
  * The one place a router meets rendering: a route only declares `model` (or
  * nothing) — never a component. This map supplies the actual view for each
@@ -56,12 +71,14 @@ type RouteById<M extends Router.AnyRouter, Id> = Extract<
 export interface RouterViews<
   M extends Router.AnyRouter = Router.RegisteredRouter,
   Units = void,
+  Pages = Record<never, never>,
 > {
   readonly routes: {
     readonly [Id in Router.RouteIds<Router.RouterGroupOf<M>>]?: RouteComponent<
       M,
       Router.RouteMatch<RouteById<M, Id>>,
-      Units
+      Units,
+      PageUnitOf<Pages, Id>
     >;
   };
   readonly pending?: BoundaryComponent<M>;
@@ -72,10 +89,12 @@ export interface RouterViews<
 export interface MatchesProps<
   M extends Router.AnyRouter = Router.RegisteredRouter,
   Units = void,
+  Pages = Record<never, never>,
 > {
   readonly router: BoundRouter<M>;
-  readonly views: RouterViews<M, Units>;
+  readonly views: RouterViews<M, Units, Pages>;
   readonly units: Units;
+  readonly pages: Readonly<Record<string, unknown>>;
 }
 
 const renderBoundary = <M extends Router.AnyRouter>(
@@ -90,18 +109,20 @@ const renderBoundary = <M extends Router.AnyRouter>(
     : <Component router={router} match={match} error={state.error} />;
 };
 
-export function Matches<M extends Router.AnyRouter = Router.RegisteredRouter, Units = void>({
-  router,
-  views,
-  units,
-}: MatchesProps<M, Units>): React.ReactNode {
+export function Matches<
+  M extends Router.AnyRouter = Router.RegisteredRouter,
+  Units = void,
+  Pages = Record<never, never>,
+>({ router, views, units, pages }: MatchesProps<M, Units, Pages>): React.ReactNode {
   const state = router.state as Router.RouterState<Router.RouterRoutes<M>>;
   if (state.status === "error") return renderBoundary(views.error, router, state);
   if (state.status === "not-found") return renderBoundary(views.notFound, router, state);
   if (state.status === "pending" && state.matches.length === 0) {
     return views.pending === undefined ? null : <>{views.pending({ router })}</>;
   }
-  return <MatchRenderer router={router} views={views} units={units} state={state} index={0} />;
+  return (
+    <MatchRenderer router={router} views={views} units={units} pages={pages} state={state} index={0} />
+  );
 }
 
 /** The extra prop the router view takes when its views need child units:
@@ -110,21 +131,42 @@ type UnitsProp<Units> = [Units] extends [void]
   ? { readonly units?: undefined }
   : { readonly units: Units };
 
-const makeRouterView = <M extends Router.AnyRouter, Units = void>(
-  router: M,
-  views: RouterViews<M, Units>,
-): React.FC<ViewProps<M> & UnitsProp<Units>> => {
+const makeRouterView = <P extends Router.AnyPagesModel, Units = void>(
+  pages: P,
+  views: RouterViews<PagesRouterOf<P>, Units, PagesMapOf<P>>,
+): React.FC<{ readonly unit: Model.PortsOf<P> } & UnitsProp<Units>> => {
+  type M = PagesRouterOf<P>;
   const Bound = UnitView.make(
-    router as never,
-    (bound, extra: { readonly forwardedUnits: Units }) => (
+    // The pages model carries its router value (typed opaquely — cycle
+    // breaker); the inner view binds the ROUTER unit for state/navigation.
+    pages.router as never,
+    (
+      bound,
+      extra: { readonly forwardedUnits: Units; readonly pages: Readonly<Record<string, unknown>> },
+    ) => (
       <BoundRouterContext.Provider value={bound as BoundRouter<M>}>
-        <Matches router={bound as BoundRouter<M>} views={views} units={extra.forwardedUnits} />
+        <Matches
+          router={bound as BoundRouter<M>}
+          views={views}
+          units={extra.forwardedUnits}
+          pages={extra.pages}
+        />
       </BoundRouterContext.Provider>
     ),
   );
-  const Component = (props: ViewProps<M> & UnitsProp<Units>): React.ReactNode => (
-    <Bound unit={props.unit as never} forwardedUnits={props.units as Units} />
-  );
+  const Component = (
+    props: { readonly unit: Model.PortsOf<P> } & UnitsProp<Units>,
+  ): React.ReactNode => {
+    // pages.ui = { router: <router unit>, ...page units by route id }.
+    const pagesUi = props.unit.ui as Readonly<Record<string, unknown>>;
+    return (
+      <Bound
+        unit={pagesUi["router"] as never}
+        forwardedUnits={props.units as Units}
+        pages={pagesUi}
+      />
+    );
+  };
   Component.displayName = "RouterView";
   return Component;
 };
@@ -132,16 +174,18 @@ const makeRouterView = <M extends Router.AnyRouter, Units = void>(
 export const RouterView = { make: makeRouterView };
 export const View = RouterView;
 
-const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
+const MatchRenderer = <M extends Router.AnyRouter, Units = void, Pages = Record<never, never>>({
   router,
   views,
   units,
+  pages,
   state,
   index,
 }: {
   readonly router: BoundRouter<M>;
-  readonly views: RouterViews<M, Units>;
+  readonly views: RouterViews<M, Units, Pages>;
   readonly units: Units;
+  readonly pages: Readonly<Record<string, unknown>>;
   readonly state: Router.RouterState<Router.RouterRoutes<M>>;
   readonly index: number;
 }): React.ReactNode => {
@@ -150,15 +194,22 @@ const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
   // The runtime id is erased to `string`; the map itself is keyed strictly.
   // eslint-disable-next-line revizo/no-type-assertion
   const Component = (
-    views.routes as Readonly<Record<string, RouteComponent<M, any, Units> | undefined>>
+    views.routes as Readonly<Record<string, RouteComponent<M, any, Units, any> | undefined>>
   )[match.route.id];
   const child = (
-    <MatchRenderer router={router} views={views} units={units} state={state} index={index + 1} />
+    <MatchRenderer
+      router={router}
+      views={views}
+      units={units}
+      pages={pages}
+      state={state}
+      index={index + 1}
+    />
   );
   return Component === undefined ? (
     child
   ) : (
-    <Component router={router} match={match as never} units={units}>
+    <Component router={router} match={match as never} page={pages[match.route.id]} units={units}>
       {child}
     </Component>
   );
