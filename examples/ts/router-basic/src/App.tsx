@@ -3,7 +3,7 @@ import * as Option from "effect/Option";
 import { View } from "@unitflow/react";
 import { Link, RouterView } from "@unitflow/router/react";
 import type { User } from "./api";
-import { AppPages, UserPageModel, UsersPageModel } from "./routes";
+import { AppRouter, UserPageModel, UsersPageModel } from "./routes";
 
 const Pending = () => <div className="state">Loading…</div>;
 
@@ -33,13 +33,14 @@ const UsersPage = View.make(UsersPageModel, ({ list, reload }) => {
   );
 });
 
-const UserPage = View.make(UserPageModel, ({ user, search }, { id }: { readonly id: number }) => {
+const UserPage = View.make(UserPageModel, ({ user, params, search }) => {
   const value = AsyncResult.value(user);
+  const id = Option.map(params, (current) => current.id);
   const page = Option.getOrElse(
     Option.map(search, (current) => current.page),
     () => 1,
   );
-  if (Option.isNone(value)) {
+  if (Option.isNone(value) || Option.isNone(id)) {
     return AsyncResult.isFailure(user) ? <div className="state">Not found</div> : <Pending />;
   }
   return (
@@ -48,9 +49,11 @@ const UserPage = View.make(UserPageModel, ({ user, search }, { id }: { readonly 
       <p className="muted">{value.value.role}</p>
       <p>{value.value.bio}</p>
       <footer className="row">
-        <span className="muted">page {page} (from ?page=)</span>
+        <span className="muted">
+          route data through the model: id = {id.value}, page = {page}
+        </span>
         {/* Same route, different search: pagination through the URL. */}
-        <Link to="/users/:id" params={{ id }} search={{ page: page + 1 }}>
+        <Link to="/users/:id" params={{ id: id.value }} search={{ page: page + 1 }}>
           Next page
         </Link>
         <Link to="/users">Back</Link>
@@ -59,10 +62,10 @@ const UserPage = View.make(UserPageModel, ({ user, search }, { id }: { readonly 
   );
 });
 
-/** The single meeting point of routes and React. Each view whose route is
- * in the pages map receives that model's unit as `page` — no manual
- * leasing, no threading. */
-export const Outlet = RouterView.make(AppPages, {
+/** ONE map stitches routes, models, and views: a plain function is just a
+ * view (with its route's narrowed `match`), `RouterView.page(Model, view)`
+ * ties a page model to its view — the model's unit arrives as `page`. */
+export const AppView = RouterView.make(AppRouter, {
   routes: {
     home: ({ children }) => (
       <main className="shell">
@@ -73,13 +76,8 @@ export const Outlet = RouterView.make(AppPages, {
         {children ?? <p className="muted">Pick a page — data loads when its route opens.</p>}
       </main>
     ),
-    users: ({ page }) => <UsersPage unit={page} />,
-    user: ({ page, match }) => (
-      <>
-        <p className="muted">URL params, decoded: id = {match.params.id}</p>
-        <UserPage unit={page} id={match.params.id} />
-      </>
-    ),
+    users: RouterView.page(UsersPageModel, ({ page }) => <UsersPage unit={page} />),
+    user: RouterView.page(UserPageModel, ({ page }) => <UserPage unit={page} />),
   },
   notFound: () => <div className="state">404</div>,
 });

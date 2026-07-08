@@ -5,11 +5,11 @@ import { devtools } from "@unitflow/devtools";
 import { Unitflow, UnitflowRuntime } from "@unitflow/react";
 import { Router } from "@unitflow/router";
 import { usersApi, UsersApi } from "./api";
-import { Outlet } from "./App";
-import { AppPages, AppRouter, UserPageModel, UsersPageModel } from "./routes";
+import { AppView } from "./App";
+import { AppRouter, UserPageModel, UsersPageModel } from "./routes";
 import "./styles.css";
 
-const layer = AppPages.layer.pipe(
+const layer = AppView.model.layer.pipe(
   Layer.provideMerge(UsersPageModel.layer),
   Layer.provideMerge(UserPageModel.layer),
   Layer.provideMerge(AppRouter.layer),
@@ -26,10 +26,10 @@ globalThis.addEventListener("beforeunload", () => {
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {/* The root IS the pages model: it owns the router and every mapped
-        page model — no hand-written AppModel. */}
-    <Unitflow runtime={runtime} rootModel={AppPages}>
-      {(pages) => <Outlet unit={pages} />}
+    {/* The view carries its own root model: it owns the router and every
+        page model stitched into the views map. */}
+    <Unitflow runtime={runtime} rootModel={AppView.model}>
+      {(pages) => <AppView unit={pages} />}
     </Unitflow>
   </React.StrictMode>,
 );

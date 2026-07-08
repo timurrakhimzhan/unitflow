@@ -625,7 +625,7 @@ export type PageMap<Group extends AnyRouteGroup> = {
 };
 
 type PageServicesOfMap<Pages> = {
-  [K in keyof Pages]: Pages[K] extends Model.AnyService
+  [K in keyof Pages]-?: Pages[K] extends Model.AnyService
     ? Context.Service.Identifier<Pages[K]>
     : never;
 }[keyof Pages];

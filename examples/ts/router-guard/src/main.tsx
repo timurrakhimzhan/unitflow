@@ -4,16 +4,15 @@ import * as Layer from "effect/Layer";
 import { devtools } from "@unitflow/devtools";
 import { Unitflow, UnitflowRuntime } from "@unitflow/react";
 import { Router } from "@unitflow/router";
-import { App } from "./App";
-import { AppModel } from "./model";
-import { AppPages, AppRouter, AuthGuardLive } from "./routes";
+import { App, AppModel, AppView } from "./App";
+import { AppRouter, AuthGuardLive } from "./routes";
 import { SessionModel } from "./session";
 import "./styles.css";
 
 // Forget AuthGuardLive here and the layer no longer typechecks: the router
 // requires the guard TAG, the guard requires the session.
 const layer = AppModel.layer.pipe(
-  Layer.provideMerge(AppPages.layer),
+  Layer.provideMerge(AppView.model.layer),
   Layer.provideMerge(AppRouter.layer),
   Layer.provideMerge(Router.browserHistoryLayer),
   Layer.provideMerge(AuthGuardLive),

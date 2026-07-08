@@ -75,17 +75,8 @@ export class UserPageModel extends Model.Service<UserPageModel>()(
       return {
         inputs: {},
         outputs: { user: user.state },
-        ui: { user: user.state, search: unit.outputs.search },
+        ui: { user: user.state, params: unit.outputs.params, search: unit.outputs.search },
       };
     }),
 }) {}
 
-
-/** The pages map lives AFTER the models (a route referencing its model
- * while the model reads `router.routes` would be a type-inference cycle).
- * Keys are typechecked against the route ids; `AppPages` is the view
- * tree's root model — it owns the router and every page model. */
-export const AppPages = AppRouter.pages({
-  users: UsersPageModel,
-  user: UserPageModel,
-});
