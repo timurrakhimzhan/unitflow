@@ -39,6 +39,12 @@
       ],
       "@unitflow/devtools": [
         "../../packages/devtools/src/index.ts"
+      ],
+      "@unitflow/router/react": [
+        "../../packages/router/src/react.tsx"
+      ],
+      "@unitflow/router": [
+        "../../packages/router/src/index.ts"
       ]
     }
   }

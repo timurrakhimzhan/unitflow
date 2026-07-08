@@ -13,6 +13,8 @@ query-search/      Query-driven async search with an injected Effect service
 kanban-board/      Keyed child models, Model.list, nested Views, list disposal
 paginated-table/   Paginated Query table with a nested paginated hover popover
 optimistic-todos/  Optimistic updates with rollback from plain Store + Mutation
+router-basic/      Typed routes, route units gating page Queries, Link/RouterView
+router-guard/      Router middleware: auth gate with typed Provides and redirects
 ```
 
 ## Commands
@@ -24,6 +26,8 @@ pnpm --filter @unitflow/example-query-search dev
 pnpm --filter @unitflow/example-kanban-board dev
 pnpm --filter @unitflow/example-paginated-table dev
 pnpm --filter @unitflow/example-optimistic-todos dev
+pnpm --filter @unitflow/example-router-basic dev
+pnpm --filter @unitflow/example-router-guard dev
 ```
 
 The apps resolve `@unitflow/*` to `packages/*/src` in dev, so they can be used

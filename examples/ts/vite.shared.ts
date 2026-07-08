@@ -13,5 +13,7 @@ export const unitflowAliases: AliasOptions = [
   { find: "@unitflow/core/runtime", replacement: fromRoot("packages/core/src/runtime.ts") },
   { find: "@unitflow/core/store", replacement: fromRoot("packages/core/src/store.ts") },
   { find: "@unitflow/react", replacement: fromRoot("packages/react/src/index.ts") },
+  { find: "@unitflow/router/react", replacement: fromRoot("packages/router/src/react.tsx") },
+  { find: "@unitflow/router", replacement: fromRoot("packages/router/src/index.ts") },
   { find: "@unitflow/core", replacement: fromRoot("packages/core/src/index.ts") },
 ];
