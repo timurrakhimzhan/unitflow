@@ -117,7 +117,7 @@ describe("@unitflow/router", () => {
   it.effect("builds prefixed group links through Effect dependency injection", () => {
     const AppRouter = makeRouter();
     return Effect.gen(function* () {
-      const href = yield* Router.buildHref(AppRouter, { to: "/admin/settings" });
+      const href = yield* AppRouter.buildHref({ to: "/admin/settings" });
       assert.strictEqual(href, "/admin/settings");
     }).pipe(Effect.provide(AppRouter.layer.pipe(Layer.provideMerge(testEnv()))));
   });
@@ -416,7 +416,7 @@ describe("@unitflow/router", () => {
     const OtherRouter = Router.make("/test/router/other", routeGroup);
     const bound = undefined as unknown as BoundRouter<typeof TypedRouter>;
 
-    const hrefEffect: Effect.Effect<string, unknown, any> = Router.buildHref(TypedRouter, {
+    const hrefEffect: Effect.Effect<string, unknown, any> = TypedRouter.buildHref({
       to: "/users/:id",
       params: { id: 1 },
       search: { page: 1 },
@@ -425,17 +425,17 @@ describe("@unitflow/router", () => {
 
     if (false) {
       // @ts-expect-error path params are required
-      Router.buildHref(TypedRouter, { to: "/users/:id", search: { page: 1 } });
+      TypedRouter.buildHref({ to: "/users/:id", search: { page: 1 } });
       // @ts-expect-error path params use the decoded schema type
-      Router.buildHref(TypedRouter, { to: "/users/:id", params: { id: "1" }, search: { page: 1 } });
+      TypedRouter.buildHref({ to: "/users/:id", params: { id: "1" }, search: { page: 1 } });
       // @ts-expect-error search input is typed
-      Router.buildHref(TypedRouter, { to: "/users/:id", params: { id: 1 }, search: { page: "1" } });
+      TypedRouter.buildHref({ to: "/users/:id", params: { id: 1 }, search: { page: "1" } });
       // @ts-expect-error paths are constrained to declared route paths
-      Router.buildHref(TypedRouter, { to: "/missing" });
+      TypedRouter.buildHref({ to: "/missing" });
       // Providing the WRONG router's layer must not discharge the requirement:
       // the leftover service id keeps the effect from typing as Registry-only.
       // @ts-expect-error DI is tied to the concrete router service id
-      const wrongDi: Effect.Effect<string, unknown, Registry> = Router.buildHref(TypedRouter, {
+      const wrongDi: Effect.Effect<string, unknown, Registry> = TypedRouter.buildHref({
         to: "/users/:id",
         params: { id: 1 },
         search: { page: 1 },

@@ -763,11 +763,40 @@ interface CompiledRoute<R extends Route.Any> {
   readonly length: number;
 }
 
+/** Location helpers attached to the router value itself
+ * (`AppRouter.buildHref({...})`). A separate interface intersected onto
+ * {@link RouterModel} at `make` — declared inside RouterModel these method
+ * signatures close a resolution cycle (param -> ToOptions -> AnyRouter ->
+ * RouterModel -> param) that the ServiceClass heritage forces TypeScript to
+ * evaluate eagerly. */
+export interface RouterTargets<Id extends string, Group extends AnyRouteGroup> {
+  /** Builds a location for a route target without navigating. */
+  readonly buildLocation: <const To extends RoutePath<RouterController<Group>>>(
+    options: ToOptions<RouterController<Group>, To>,
+  ) => Effect.Effect<
+    ParsedLocation,
+    unknown,
+    RouterModel<Id, Group> | Registry | RouterServicesForGroup<Group>
+  >;
+  /** Builds an href string for a route target without navigating. */
+  readonly buildHref: <const To extends RoutePath<RouterController<Group>>>(
+    options: ToOptions<RouterController<Group>, To>,
+  ) => Effect.Effect<
+    string,
+    unknown,
+    RouterModel<Id, Group> | Registry | RouterServicesForGroup<Group>
+  >;
+  /** Whether the current location matches the given route target. */
+  readonly matchRoute: <const To extends RoutePath<RouterController<Group>>>(
+    options: ToOptions<RouterController<Group>, To> & ActiveOptions,
+  ) => Effect.Effect<boolean, never, RouterModel<Id, Group> | Registry>;
+}
+
 export const make = <const Id extends string, const Group extends AnyRouteGroup>(
   id: Id,
   routeGroup: Group,
   options: RouterOptions = {},
-): RouterModel<Id, Group> => {
+): RouterModel<Id, Group> & RouterTargets<Id, Group> => {
   // The `routes` model's per-key claim — `Model.get(router.routes, K)`
   // returns THE route with id K — is only sound if ids are unique: the unit
   // resolves its route by `find(route.id === key)`. Enforce the
@@ -830,7 +859,14 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
   return Object.assign(router, {
     routes,
     layer: routes.layer.pipe(Layer.provideMerge(router.layer)),
-  });
+    buildLocation: (options: ToOptions<RouterController<Group>, RoutePath<RouterController<Group>>>) =>
+      Effect.flatMap(getController(router), (api) => api.buildLocationEffect(options as never)),
+    buildHref: (options: ToOptions<RouterController<Group>, RoutePath<RouterController<Group>>>) =>
+      Effect.flatMap(getController(router), (api) => api.buildHrefEffect(options as never)),
+    matchRoute: (
+      options: ToOptions<RouterController<Group>, RoutePath<RouterController<Group>>> & ActiveOptions,
+    ) => Effect.map(getController(router), (api) => api.matchRoute(options as never)),
+  } as never);
 };
 
 const makeShape = <Group extends AnyRouteGroup>(
@@ -1333,30 +1369,6 @@ const getController = <M extends AnyRouter>(
     >);
     return yield* Store.get(ports.outputs.api);
   }) as unknown as Effect.Effect<RouterControllerOf<M>, never, Context.Service.Identifier<M> | Registry>);
-
-export const buildLocation = <M extends AnyRouter, const To extends RoutePath<M>>(
-  router: M,
-  options: ToOptions<M, To>,
-): Effect.Effect<
-  ParsedLocation,
-  unknown,
-  Context.Service.Identifier<M> | Registry | RouterServicesForGroup<RouterGroupOf<M>>
-> => Effect.flatMap(getController(router), (api) => api.buildLocationEffect(options as never));
-
-export const buildHref = <M extends AnyRouter, const To extends RoutePath<M>>(
-  router: M,
-  options: ToOptions<M, To>,
-): Effect.Effect<
-  string,
-  unknown,
-  Context.Service.Identifier<M> | Registry | RouterServicesForGroup<RouterGroupOf<M>>
-> => Effect.flatMap(getController(router), (api) => api.buildHrefEffect(options as never));
-
-export const matchRoute = <M extends AnyRouter, const To extends RoutePath<M>>(
-  router: M,
-  options: ToOptions<M, To> & ActiveOptions,
-): Effect.Effect<boolean, never, Context.Service.Identifier<M> | Registry> =>
-  Effect.map(getController(router), (api) => api.matchRoute(options as never));
 
 export const createMemoryHistory = (options?: {
   readonly initialEntries?: ReadonlyArray<string>;

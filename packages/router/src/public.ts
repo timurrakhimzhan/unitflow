@@ -27,10 +27,6 @@ export {
   Middleware,
   // router model
   make,
-  // location helpers
-  buildLocation,
-  buildHref,
-  matchRoute,
   // histories — provided as layers; the create* factories stay exported for
   // custom History implementations
   History,
@@ -76,6 +72,7 @@ export type {
   NavigatePayload,
   RouterShape,
   RouterModel,
+  RouterTargets,
   RoutesModel,
   RouteUnitShape,
   RouteShapes,
