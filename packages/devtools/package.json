@@ -1,6 +1,6 @@
 {
   "name": "@unitflow/devtools",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "description": "Unitflow runtime inspector bridge and MCP server for agent-driven debugging.",
   "license": "MIT",
