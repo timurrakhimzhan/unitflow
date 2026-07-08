@@ -2,18 +2,16 @@ import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Option from "effect/Option";
 import type * as React from "react";
 import { Model, View } from "@unitflow/react";
-import { type BoundRouter, Link, RouterView } from "@unitflow/router/react";
+import { Link, RouterView } from "@unitflow/router/react";
 import type { User } from "./api";
 import { AppModel, UserPageModel, UsersPageModel } from "./model";
 import { AppRouter } from "./routes";
-
-type AppBoundRouter = BoundRouter<typeof AppRouter>;
 
 const Pending = () => <div className="state">Loading…</div>;
 
 const UsersPage = View.make(
   UsersPageModel,
-  ({ list, reload }, { router }: { readonly router: AppBoundRouter }) => {
+  ({ list, reload }) => {
     const value = AsyncResult.value(list);
     if (Option.isNone(value)) {
       return AsyncResult.isFailure(list) ? <div className="state">Closed</div> : <Pending />;
@@ -28,7 +26,7 @@ const UsersPage = View.make(
           {value.value.map((user: User) => (
             <li key={user.id}>
               {/* to/params/search are typed against the route table */}
-              <Link router={router} to="/users/:id" params={{ id: user.id }} search={{ page: 1 }}>
+              <Link to="/users/:id" params={{ id: user.id }} search={{ page: 1 }}>
                 <strong>{user.name}</strong>
                 <span>{user.role}</span>
               </Link>
@@ -42,7 +40,7 @@ const UsersPage = View.make(
 
 const UserPage = View.make(
   UserPageModel,
-  ({ user, search }, { router, id }: { readonly router: AppBoundRouter; readonly id: number }) => {
+  ({ user, search }, { id }: { readonly id: number }) => {
     const value = AsyncResult.value(user);
     const page = Option.getOrElse(
       Option.map(search, (current) => current.page),
@@ -59,10 +57,10 @@ const UserPage = View.make(
         <footer className="row">
           <span className="muted">page {page} (from ?page=)</span>
           {/* Same route, different search: pagination through the URL. */}
-          <Link router={router} to="/users/:id" params={{ id }} search={{ page: page + 1 }}>
+          <Link to="/users/:id" params={{ id }} search={{ page: page + 1 }}>
             Next page
           </Link>
-          <Link router={router} to="/users">
+          <Link to="/users">
             Back
           </Link>
         </footer>
@@ -81,29 +79,29 @@ interface PageUnits {
  * the owning view through `units` — a view never summons a model itself. */
 const Outlet = RouterView.make<typeof AppRouter, PageUnits>(AppRouter, {
   routes: {
-    home: ({ router, children }) => (
+    home: ({ children }) => (
       <main className="shell">
         <nav className="row">
-          <Link router={router} to="/">
+          <Link to="/">
             Home
           </Link>
-          <Link router={router} to="/users">
+          <Link to="/users">
             People
           </Link>
         </nav>
         {children ?? <p className="muted">Pick a page — data loads when its route opens.</p>}
       </main>
     ),
-    users: ({ router, units, children }) => (
+    users: ({ units, children }) => (
       <>
-        <UsersPage unit={units.usersPage} router={router} />
+        <UsersPage unit={units.usersPage} />
         {children}
       </>
     ),
-    user: ({ router, units, match }) => (
+    user: ({ units, match }) => (
       <>
         <p className="muted">URL params, decoded: id = {match.params.id}</p>
-        <UserPage unit={units.userPage} router={router} id={match.params.id} />
+        <UserPage unit={units.userPage} id={match.params.id} />
       </>
     ),
   },

@@ -117,7 +117,9 @@ const makeRouterView = <M extends Router.AnyRouter, Units = void>(
   const Bound = UnitView.make(
     router as never,
     (bound, extra: { readonly forwardedUnits: Units }) => (
-      <Matches router={bound as BoundRouter<M>} views={views} units={extra.forwardedUnits} />
+      <BoundRouterContext.Provider value={bound as BoundRouter<M>}>
+        <Matches router={bound as BoundRouter<M>} views={views} units={extra.forwardedUnits} />
+      </BoundRouterContext.Provider>
     ),
   );
   const Component = (props: ViewProps<M> & UnitsProp<Units>): React.ReactNode => (
@@ -171,12 +173,30 @@ type LinkState = {
 
 type StateProps = AnchorProps & { readonly [key: `data-${string}`]: unknown };
 
+/** The bound router `RouterView` provides to everything it renders, so
+ * `Link`/`Navigate`/`MatchRoute` need no `router` prop under it. NOT a way
+ * for views to summon models — the value is the already-bound unit the
+ * RouterView owns; this only spares threading it through every level. */
+const BoundRouterContext = React.createContext<BoundRouter<any> | null>(null);
+
+const useBoundRouter = (explicit: BoundRouter<any> | undefined, who: string): BoundRouter<any> => {
+  const fromContext = React.useContext(BoundRouterContext);
+  const router = explicit ?? fromContext;
+  if (router === null || router === undefined) {
+    throw new Error(`Unitflow ${who} needs a RouterView above it (or an explicit router prop).`);
+  }
+  return router;
+};
+
 export type LinkProps<
   M extends Router.AnyRouter = Router.RegisteredRouter,
   To extends Router.RoutePath<M> = Router.RoutePath<M>,
 > = AnchorProps &
   Router.NavigateOptions<M, To> & {
-    readonly router: BoundRouter<M>;
+    /** Only needed OUTSIDE a RouterView (or with several routers): under
+     * one, the bound router arrives via context and types come from the
+     * registered router. */
+    readonly router?: BoundRouter<M>;
     readonly children?: React.ReactNode | ((state: LinkState) => React.ReactNode);
     readonly activeProps?: StateProps | (() => StateProps);
     readonly inactiveProps?: StateProps | (() => StateProps);
@@ -191,7 +211,7 @@ export type LinkComponent = <
 
 export const Link = React.forwardRef<HTMLAnchorElement, LinkProps<any, any>>(function Link(props, ref) {
   const {
-    router,
+    router: routerProp,
     activeProps,
     inactiveProps,
     children,
@@ -199,6 +219,7 @@ export const Link = React.forwardRef<HTMLAnchorElement, LinkProps<any, any>>(fun
     ...rest
   } = props;
 
+  const router = useBoundRouter(routerProp, "Link");
   const href = router.api.buildHref(rest as never);
   const isActive = router.api.matchRoute(rest as never);
   const stateProps = resolveStateProps(isActive ? activeProps : inactiveProps);
@@ -231,29 +252,22 @@ export type NavigateProps<
   M extends Router.AnyRouter = Router.RegisteredRouter,
   To extends Router.RoutePath<M> = Router.RoutePath<M>,
 > = Router.NavigateOptions<M, To> & {
-  readonly router: BoundRouter<M>;
+  readonly router?: BoundRouter<M>;
 };
 
-export class Navigate<
+export function Navigate<
   M extends Router.AnyRouter = Router.RegisteredRouter,
   To extends Router.RoutePath<M> = Router.RoutePath<M>,
-> extends React.PureComponent<NavigateProps<M, To>> {
-  componentDidMount(): void {
-    this.navigate();
-  }
-
-  componentDidUpdate(previous: NavigateProps<M, To>): void {
-    if (previous !== this.props) this.navigate();
-  }
-
-  private navigate(): void {
-    const { router, ...options } = this.props;
-    router.navigate(options as never);
-  }
-
-  render(): null {
-    return null;
-  }
+>(props: NavigateProps<M, To>): null {
+  const { router: routerProp, ...options } = props;
+  const router = useBoundRouter(routerProp, "Navigate");
+  const navigate = router.navigate;
+  React.useEffect(() => {
+    navigate(options as never);
+    // Re-fires only on a new target, not on unrelated renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigate, JSON.stringify(options)]);
+  return null;
 }
 
 export type MatchRouteProps<
@@ -261,7 +275,7 @@ export type MatchRouteProps<
   To extends Router.RoutePath<M> = Router.RoutePath<M>,
 > = Router.ToOptions<M, To> &
   Router.ActiveOptions & {
-    readonly router: BoundRouter<M>;
+    readonly router?: BoundRouter<M>;
     readonly children?:
       | React.ReactNode
       | ((state: { readonly isActive: boolean }) => React.ReactNode);
@@ -271,7 +285,8 @@ export function MatchRoute<
   M extends Router.AnyRouter = Router.RegisteredRouter,
   const To extends Router.RoutePath<M> = Router.RoutePath<M>,
 >(props: MatchRouteProps<M, To>): React.ReactNode {
-  const { router, children, ...rest } = props;
+  const { router: routerProp, children, ...rest } = props;
+  const router = useBoundRouter(routerProp, "MatchRoute");
   const isActive = router.api.matchRoute(rest as never);
   if (typeof children === "function") return children({ isActive });
   return isActive ? children : null;
@@ -288,7 +303,8 @@ export const createLink = <Props extends AnchorProps,>(
   Component: React.ComponentType<Props & React.RefAttributes<HTMLAnchorElement>>,
 ): CreatedLinkComponent =>
   React.forwardRef<HTMLAnchorElement, LinkProps<any, any>>(function CreatedLink(props, ref) {
-    const { router, ...rest } = props;
+    const { router: routerProp, ...rest } = props;
+    const router = useBoundRouter(routerProp, "createLink");
     const href = router.api.buildHref(rest as never);
     return <Component {...(rest as unknown as Props)} href={href} ref={ref} />;
   }) as CreatedLinkComponent;

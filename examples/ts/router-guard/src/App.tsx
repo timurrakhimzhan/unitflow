@@ -49,15 +49,15 @@ const LoginForm = ({
 
 const Outlet = RouterView.make<typeof AppRouter, PageUnits>(AppRouter, {
   routes: {
-    home: ({ router, units, children }) => (
+    home: ({ units, children }) => (
       <main className="shell">
         <nav className="row">
-          <Link router={router} to="/">
+          <Link to="/">
             Home
           </Link>
           {/* Navigating here while logged out redirects to /login BEFORE
               the URL changes — no flash of /admin. */}
-          <Link router={router} to="/admin">
+          <Link to="/admin">
             Admin
           </Link>
           <SessionBadge session={units.session} />
