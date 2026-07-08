@@ -1,9 +1,12 @@
 import { Event, Model, Store } from "@unitflow/core";
 import { Registry, trackPublish } from "@unitflow/core/registry";
-import type * as Context from "effect/Context";
+import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { type Pipeable, pipeArguments } from "effect/Pipeable";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
@@ -18,25 +21,11 @@ const PipeableProto: Pipeable = {
   },
 };
 
-export interface Register {}
+// Type-only import: erased at runtime, so the index → public → router value
+// cycle never materializes.
+import type { Register } from "./index.js";
 
 type MaybeEffect<A, E, R> = A | Effect.Effect<A, E, R>;
-
-type SuccessOf<T> = T extends Effect.Effect<infer A, any, any> ? A : T;
-type ErrorOf<T> = T extends Effect.Effect<any, infer E, any> ? E : never;
-type ServicesOf<T> = T extends Effect.Effect<any, any, infer R> ? R : never;
-type FunctionReturn<F> = F extends (...args: ReadonlyArray<any>) => infer A ? A : never;
-type FunctionSuccess<F> = SuccessOf<FunctionReturn<F>>;
-type FunctionError<F> = ErrorOf<FunctionReturn<F>>;
-type FunctionServices<F> = ServicesOf<FunctionReturn<F>>;
-type BeforeContextOf<Before> = [FunctionSuccess<Before>] extends [never]
-  ? EmptyRecord
-  : [FunctionSuccess<Before>] extends [void]
-    ? EmptyRecord
-    : FunctionSuccess<Before>;
-type LoaderDataOf<Loader> = [FunctionSuccess<Loader>] extends [never]
-  ? undefined
-  : FunctionSuccess<Loader>;
 
 export type SearchPrimitive = string | number | boolean | null | undefined;
 export type SearchValue = SearchPrimitive | ReadonlyArray<SearchPrimitive>;
@@ -150,30 +139,18 @@ export const schemaSearch = <
 ): SearchCodec<I, A, Schema.SchemaError, RD> =>
   search<I, A, Schema.SchemaError, RD>((raw) => Schema.decodeUnknownEffect(schema)(raw, options));
 
-export interface RouteContext<Path extends string, Params, Search, Context> {
+export interface RouteContext<Path extends string, Params, Search> {
   readonly route: Route.Any;
   readonly location: ParsedLocation;
   readonly params: Params;
   readonly search: Search;
-  readonly context: Context;
   readonly path: Path;
 }
-
-export type BeforeLoadFn<Path extends string, Params, Search, Context, A, E, R> = (
-  context: RouteContext<Path, Params, Search, Context>,
-) => MaybeEffect<A, E, R>;
-
-export type LoaderFn<Path extends string, Params, Search, Context, A, E, R> = (
-  context: RouteContext<Path, Params, Search, Context>,
-) => MaybeEffect<A, E, R>;
 
 export interface RouteOptions<
   Path extends string,
   ParamsSchema extends AnyParamsSchema,
   Search extends AnySearchDefinition,
-  Before,
-  Loader,
-  View,
 > {
   readonly path: Path;
   readonly params?: ParamsSchema;
@@ -182,49 +159,111 @@ export interface RouteOptions<
     params: PathParams<Path>,
   ) => MaybeEffect<ParamsOutputOf<Path, ParamsSchema> | false, any, any>;
   readonly stringifyParams?: (params: ParamsInputOf<Path, ParamsSchema>) => PathParams<Path>;
-  readonly beforeLoad?: Before &
-    BeforeLoadFn<Path, ParamsOutputOf<Path, ParamsSchema>, SearchOutputOf<Search>, SearchRecord, any, any, any>;
-  readonly loader?: Loader &
-    LoaderFn<
-      Path,
-      ParamsOutputOf<Path, ParamsSchema>,
-      SearchOutputOf<Search>,
-      BeforeContextOf<Before>,
-      any,
-      any,
-      any
-    >;
-  readonly component?: View;
-  readonly pendingComponent?: View;
-  readonly errorComponent?: View;
-  readonly notFoundComponent?: View;
+  /** The model backing this route's data/behavior. The router never
+   * constructs or reads it — it is a plain reference for application code
+   * (rendering, prefetching) to act on. */
+  readonly model?: Model.AnyService;
   readonly staticData?: SearchRecord;
   readonly meta?: (
-    context: RouteContext<Path, ParamsOutputOf<Path, ParamsSchema>, SearchOutputOf<Search>, any>,
+    context: RouteContext<Path, ParamsOutputOf<Path, ParamsSchema>, SearchOutputOf<Search>>,
   ) => ReadonlyArray<SearchRecord>;
   readonly links?: (
-    context: RouteContext<Path, ParamsOutputOf<Path, ParamsSchema>, SearchOutputOf<Search>, any>,
+    context: RouteContext<Path, ParamsOutputOf<Path, ParamsSchema>, SearchOutputOf<Search>>,
   ) => ReadonlyArray<SearchRecord>;
-  readonly preload?: false | "intent" | "viewport" | "render";
-  readonly staleTime?: number;
-  readonly preloadStaleTime?: number;
-  readonly gcTime?: number;
   readonly caseSensitive?: boolean;
 }
+
+/** What a middleware handler receives: the matched route's decoded
+ * params/search and the target location — read-only, before the navigation
+ * commits. */
+export type MiddlewareContext = RouteContext<string, unknown, unknown>;
+
+/** The service value behind a middleware tag: a guard run for every matched
+ * route the middleware is attached to, BEFORE the navigation commits.
+ * Failing with {@link RedirectError}/{@link NotFoundError} cancels the
+ * navigation — the blocked URL never reaches history or state. A non-void
+ * success value is the middleware's `Provides`: it lands in the route
+ * unit's `provided` port, `Option.some` whenever the route is open — the
+ * guard having passed is what LET it open. */
+export interface MiddlewareHandler<Provides = void> {
+  (context: MiddlewareContext): Effect.Effect<Provides, RedirectError | NotFoundError>;
+}
+
+export type AnyMiddleware = Context.Service<any, MiddlewareHandler<any>>;
+
+export type ProvidesOf<M> = M extends { readonly "~provides": infer P } ? P : never;
+
+/**
+ * Declares a middleware as a Context service — a TAG, not a function — so
+ * the router only ever requires the tag: the implementation (and ITS
+ * dependencies) live in the layer `make` builds, composed at the feature
+ * level. Attaching an inline function instead would leak every guard's
+ * services into the router's own requirements.
+ *
+ * ```ts
+ * class AuthGuard extends Router.Middleware<AuthGuard>()("app/AuthGuard") {}
+ * const AuthGuardLive = AuthGuard.make((ctx) => Effect.gen(function* () {
+ *   const session = yield* SessionService;
+ *   if (!session.canAccess) return yield* Effect.fail(Router.RedirectError({ to: "/login" }));
+ * }));
+ * ```
+ */
+export interface MiddlewareClass<Self, Id extends string, Provides = void>
+  extends Context.ServiceClass<Self, Id, MiddlewareHandler<Provides>> {
+  /** Type-level only: what the guard provides to the routes it protects. */
+  readonly "~provides": Provides;
+  /** Builds the implementation layer. The handler's services are resolved
+   * once at layer build and captured, so the stored handler itself is
+   * dependency-free — the router only ever requires the tag. */
+  readonly make: <R = never>(
+    handler: (
+      context: MiddlewareContext,
+    ) => Effect.Effect<Provides, RedirectError | NotFoundError, R>,
+  ) => Layer.Layer<Self, never, R>;
+}
+
+export const Middleware =
+  <Self>() =>
+  <const Id extends string>(id: Id) =>
+  <Provides = void>(): MiddlewareClass<Self, Id, Provides> => {
+    const Service = Context.Service<Self, MiddlewareHandler<Provides>>()(id);
+    return class extends Service {
+      static readonly make = <R = never>(
+        handler: (
+          context: MiddlewareContext,
+        ) => Effect.Effect<Provides, RedirectError | NotFoundError, R>,
+      ): Layer.Layer<Self, never, R> =>
+        Layer.effect(
+          Service,
+          Effect.map(
+            Effect.context<R>(),
+            (services): MiddlewareHandler<Provides> =>
+              (context) =>
+                // The captured context covers exactly `R`; the cast erases
+                // the generic TypeScript cannot discharge here.
+                // eslint-disable-next-line revizo/no-type-assertion
+                Effect.provide(handler(context), services) as Effect.Effect<
+                  Provides,
+                  RedirectError | NotFoundError
+                >,
+          ),
+        );
+    } as MiddlewareClass<Self, Id, Provides>;
+  };
 
 export interface Route<
   Id extends string,
   Path extends string,
   ParamsSchema extends AnyParamsSchema,
   Search extends AnySearchDefinition,
-  Before,
-  Loader,
-  View,
+  Requires = never,
+  Provided = EmptyRecord,
 > extends Pipeable {
   readonly [RouteTypeId]: typeof RouteTypeId;
   readonly id: Id;
   readonly path: Path;
-  readonly options: RouteOptions<Path, ParamsSchema, Search, Before, Loader, View>;
+  readonly options: RouteOptions<Path, ParamsSchema, Search>;
+  readonly middlewares: ReadonlyArray<AnyMiddleware>;
   readonly "~types": {
     readonly id: Id;
     readonly path: Path;
@@ -232,36 +271,23 @@ export interface Route<
     readonly paramsInput: ParamsInputOf<Path, ParamsSchema>;
     readonly search: SearchOutputOf<Search>;
     readonly searchInput: SearchInputOf<Search>;
-    readonly beforeContext: BeforeContextOf<Before>;
-    readonly loaderData: LoaderDataOf<Loader>;
-    readonly error:
-      | ParamsErrorOf<ParamsSchema>
-      | SearchErrorOf<Search>
-      | FunctionError<Before>
-      | FunctionError<Loader>
-      | Redirect
-      | NotFound;
-    readonly services:
-      | ParamsServicesOf<ParamsSchema>
-      | SearchServicesOf<Search>
-      | FunctionServices<Before>
-      | FunctionServices<Loader>;
-    readonly view: View;
+    readonly provided: Provided;
+    readonly error: ParamsErrorOf<ParamsSchema> | SearchErrorOf<Search> | RedirectError | NotFoundError;
+    readonly services: ParamsServicesOf<ParamsSchema> | SearchServicesOf<Search> | Requires;
   };
 }
 
 export namespace Route {
-  export type Any = Route<string, any, AnyParamsSchema, AnySearchDefinition, any, any, any>;
+  export type Any = Route<string, any, AnyParamsSchema, AnySearchDefinition, any, any>;
   export type Id<R extends Any> = R["~types"]["id"];
   export type Path<R extends Any> = R["~types"]["path"];
   export type Params<R extends Any> = R["~types"]["params"];
   export type ParamsInput<R extends Any> = R["~types"]["paramsInput"];
   export type Search<R extends Any> = R["~types"]["search"];
   export type SearchInput<R extends Any> = R["~types"]["searchInput"];
-  export type LoaderData<R extends Any> = R["~types"]["loaderData"];
+  export type Provided<R extends Any> = R["~types"]["provided"];
   export type Error<R extends Any> = R["~types"]["error"];
   export type Services<R extends Any> = R["~types"]["services"];
-  export type View<R extends Any> = R["~types"]["view"];
 }
 
 export const isRoute = (value: unknown): value is Route.Any =>
@@ -272,43 +298,17 @@ export const route = <
   const Path extends string,
   ParamsSchema extends AnyParamsSchema = undefined,
   Search extends AnySearchDefinition = undefined,
-  Before extends
-    | BeforeLoadFn<Path, ParamsOutputOf<Path, ParamsSchema>, SearchOutputOf<Search>, any, any, any, any>
-    | undefined =
-      | BeforeLoadFn<Path, ParamsOutputOf<Path, ParamsSchema>, SearchOutputOf<Search>, any, any, any, any>
-      | undefined,
-  Loader extends
-    | LoaderFn<
-        Path,
-        ParamsOutputOf<Path, ParamsSchema>,
-        SearchOutputOf<Search>,
-        BeforeContextOf<Before>,
-        any,
-        any,
-        any
-      >
-    | undefined =
-      | LoaderFn<
-          Path,
-          ParamsOutputOf<Path, ParamsSchema>,
-          SearchOutputOf<Search>,
-          BeforeContextOf<Before>,
-          any,
-          any,
-          any
-        >
-      | undefined,
-  View = unknown,
 >(
   id: Id,
-  options: RouteOptions<Path, ParamsSchema, Search, Before, Loader, View>,
-): Route<Id, Path, ParamsSchema, Search, Before, Loader, View> => ({
+  options: RouteOptions<Path, ParamsSchema, Search>,
+): Route<Id, Path, ParamsSchema, Search> => ({
   ...PipeableProto,
   [RouteTypeId]: RouteTypeId,
   id,
   path: normalizePath(options.path) as Path,
   options: { ...options, path: normalizePath(options.path) as Path },
-  "~types": undefined as unknown as Route<Id, Path, ParamsSchema, Search, Before, Loader, View>["~types"],
+  middlewares: [],
+  "~types": undefined as unknown as Route<Id, Path, ParamsSchema, Search>["~types"],
 });
 
 type PrefixedRoute<R extends Route.Any, Prefix extends string> = R extends Route<
@@ -316,11 +316,10 @@ type PrefixedRoute<R extends Route.Any, Prefix extends string> = R extends Route
   infer Path,
   infer ParamsSchema,
   infer Search,
-  infer Before,
-  infer Loader,
-  infer View
+  infer Requires,
+  infer Provided
 >
-  ? Route<Id, JoinPath<Prefix, Path>, ParamsSchema, Search, Before, Loader, View>
+  ? Route<Id, JoinPath<Prefix, Path>, ParamsSchema, Search, Requires, Provided>
   : never;
 
 const prefixRoute = <R extends Route.Any, const Prefix extends string>(
@@ -328,8 +327,31 @@ const prefixRoute = <R extends Route.Any, const Prefix extends string>(
   prefix: Prefix,
 ): PrefixedRoute<R, Prefix> => {
   const path = joinPaths(prefix, current.path);
-  return route(current.id, { ...current.options, path } as never) as PrefixedRoute<R, Prefix>;
+  // Spread (not `route(...)`) so `middlewares` and the pipe method survive.
+  return {
+    ...current,
+    path,
+    options: { ...current.options, path },
+  } as unknown as PrefixedRoute<R, Prefix>;
 };
+
+type WithMiddleware<R extends Route.Any, M extends AnyMiddleware> = R extends Route<
+  infer Id,
+  infer Path,
+  infer ParamsSchema,
+  infer Search,
+  infer Requires,
+  infer Provided
+>
+  ? Route<
+      Id,
+      Path,
+      ParamsSchema,
+      Search,
+      Requires | Context.Service.Identifier<M>,
+      [ProvidesOf<M>] extends [void] ? Provided : Provided & ProvidesOf<M>
+    >
+  : never;
 
 export interface RouteGroup<R extends Route.Any> extends Pipeable {
   readonly [RouteGroupTypeId]: typeof RouteGroupTypeId;
@@ -339,6 +361,10 @@ export interface RouteGroup<R extends Route.Any> extends Pipeable {
     ...groups: Groups
   ): RouteGroup<R | RoutesOf<Groups[number]>>;
   prefix<const Prefix extends string>(prefix: Prefix): RouteGroup<PrefixedRoute<R, Prefix>>;
+  /** Attaches a middleware TAG to every route currently in the group: the
+   * router will require the tag's implementation layer, run it for each
+   * matched route before committing a navigation. */
+  middleware<M extends AnyMiddleware>(middleware: M): RouteGroup<WithMiddleware<R, M>>;
 }
 
 export type AnyRouteGroup = RouteGroup<Route.Any>;
@@ -353,6 +379,14 @@ const RouteGroupProto = {
   },
   prefix(this: AnyRouteGroup, prefix: string) {
     return group(...this.routes.map((current) => prefixRoute(current, prefix)));
+  },
+  middleware(this: AnyRouteGroup, middleware: AnyMiddleware) {
+    return group(
+      ...this.routes.map((current) => ({
+        ...current,
+        middlewares: [...current.middlewares, middleware],
+      })),
+    );
   },
 };
 
@@ -406,8 +440,8 @@ export interface RouteMatch<R extends Route.Any = Route.Any> {
   readonly pathname: string;
   readonly params: Route.Params<R>;
   readonly search: Route.Search<R>;
-  readonly context: SearchRecord;
-  readonly loaderData: Route.LoaderData<R>;
+  /** What the matched branch's middlewares provided, parents included. */
+  readonly provided: Route.Provided<R>;
   readonly staticData: SearchRecord;
   readonly meta: ReadonlyArray<SearchRecord>;
   readonly links: ReadonlyArray<SearchRecord>;
@@ -424,27 +458,11 @@ export interface RouterState<R extends Route.Any = Route.Any> {
   readonly error?: unknown;
 }
 
-export interface RouteMask<TRouter extends AnyRouter = AnyRouter> {
-  readonly from: RoutePath<TRouter>;
-  readonly to: RoutePath<TRouter>;
-  readonly unmaskOnReload?: boolean;
-}
-
-export interface RouterOptions<Context extends SearchRecord = EmptyRecord> {
+export interface RouterOptions {
   readonly history?: RouterHistory;
-  readonly context?: Context;
   readonly basepath?: string;
-  readonly defaultPreload?: false | "intent" | "viewport" | "render";
-  readonly defaultStaleTime?: number;
-  readonly defaultPreloadStaleTime?: number;
-  readonly defaultGcTime?: number;
   readonly parseSearch?: (search: string) => RawSearch;
   readonly stringifySearch?: (search: SearchRecord) => string;
-  readonly routeMasks?: ReadonlyArray<RouteMask<any>>;
-  readonly notFoundMode?: "root" | "fuzzy";
-  readonly defaultPendingComponent?: unknown;
-  readonly defaultErrorComponent?: unknown;
-  readonly defaultNotFoundComponent?: unknown;
 }
 
 export interface ActiveOptions {
@@ -458,60 +476,49 @@ export type Blocker = (options: {
   readonly to: ParsedLocation;
 }) => boolean | Promise<boolean>;
 
-export interface RouterBlocker {
-  readonly unblock: Effect.Effect<void, never, Registry>;
-}
-
-export interface RouterController<
-  Group extends AnyRouteGroup = AnyRouteGroup,
-  Context extends SearchRecord = SearchRecord,
-> {
+/** The synchronous, read-only surface backing `outputs.api` — used
+ * internally (`buildLocation`/`buildHref`/`matchRoute` free functions, and
+ * the React binding's need for a value it can read outside an Effect).
+ * Every action (navigate/blockers) lives only on `inputs` as an event —
+ * this type intentionally has no method for any of them. */
+export interface RouterController<Group extends AnyRouteGroup = AnyRouteGroup> {
   readonly group: Group;
   readonly routes: ReadonlyArray<RoutesOf<Group>>;
-  readonly options: RouterOptions<Context>;
+  readonly options: RouterOptions;
   readonly history: RouterHistory;
-  readonly buildLocation: <const To extends RoutePath<RouterController<Group, Context>>>(
-    options: ToOptions<RouterController<Group, Context>, To>,
+  readonly buildLocation: <const To extends RoutePath<RouterController<Group>>>(
+    options: ToOptions<RouterController<Group>, To>,
   ) => ParsedLocation;
-  readonly buildHref: <const To extends RoutePath<RouterController<Group, Context>>>(
-    options: ToOptions<RouterController<Group, Context>, To>,
+  readonly buildHref: <const To extends RoutePath<RouterController<Group>>>(
+    options: ToOptions<RouterController<Group>, To>,
   ) => string;
-  readonly buildLocationEffect: <const To extends RoutePath<RouterController<Group, Context>>>(
-    options: ToOptions<RouterController<Group, Context>, To>,
+  readonly buildLocationEffect: <const To extends RoutePath<RouterController<Group>>>(
+    options: ToOptions<RouterController<Group>, To>,
   ) => Effect.Effect<ParsedLocation, unknown, RouterServicesForGroup<Group> | Registry>;
-  readonly buildHrefEffect: <const To extends RoutePath<RouterController<Group, Context>>>(
-    options: ToOptions<RouterController<Group, Context>, To>,
+  readonly buildHrefEffect: <const To extends RoutePath<RouterController<Group>>>(
+    options: ToOptions<RouterController<Group>, To>,
   ) => Effect.Effect<string, unknown, RouterServicesForGroup<Group> | Registry>;
-  readonly navigate: <const To extends RoutePath<RouterController<Group, Context>>>(
-    options: NavigateOptions<RouterController<Group, Context>, To>,
-  ) => Effect.Effect<void, never, RouterServicesForGroup<Group> | Registry>;
-  readonly preload: <const To extends RoutePath<RouterController<Group, Context>>>(
-    options: ToOptions<RouterController<Group, Context>, To>,
-  ) => Effect.Effect<void, never, RouterServicesForGroup<Group> | Registry>;
-  readonly matchRoute: <const To extends RoutePath<RouterController<Group, Context>>>(
-    options: ToOptions<RouterController<Group, Context>, To> & ActiveOptions,
+  readonly matchRoute: <const To extends RoutePath<RouterController<Group>>>(
+    options: ToOptions<RouterController<Group>, To> & ActiveOptions,
   ) => boolean;
-  readonly invalidate: () => Effect.Effect<void, never, RouterServicesForGroup<Group> | Registry>;
-  readonly updateContext: (context: Partial<Context>) => Effect.Effect<void>;
-  readonly block: (blocker: Blocker) => Effect.Effect<RouterBlocker, never, Registry>;
-  readonly unblock: (blocker: Blocker) => Effect.Effect<void>;
-  readonly dispose: () => Effect.Effect<void>;
 }
 
-export type AnyRouterController = RouterController<any, any>;
+export type AnyRouterController = RouterController<any>;
 
-export type NavigatePayload<M extends AnyRouter> = NavigateOptions<M, RoutePath<M>>;
-export type PreloadPayload<M extends AnyRouter> = ToOptions<M, RoutePath<M>>;
+/** A navigation payload with no free `To` parameter (event payloads, stored
+ * redirect options): distributes over the router's paths so `to` acts as the
+ * union discriminant — `params`/`search` are then checked against exactly
+ * the targeted route, not a merged shape where an empty-params member would
+ * structurally accept anything. */
+export type NavigatePayload<M extends AnyRouter> = RoutePath<M> extends infer To
+  ? To extends RoutePath<M>
+    ? NavigateOptions<M, To>
+    : never
+  : never;
 
-export interface RouterShape<
-  Group extends AnyRouteGroup,
-  Context extends SearchRecord,
-> extends Model.Shape {
+export interface RouterShape<Group extends AnyRouteGroup> extends Model.Shape {
   readonly inputs: {
-    readonly navigate: Event.Event<NavigateOptions<RouterController<Group, Context>, RoutePath<RouterController<Group, Context>>>>;
-    readonly preload: Event.Event<ToOptions<RouterController<Group, Context>, RoutePath<RouterController<Group, Context>>>>;
-    readonly invalidate: Event.Event<void>;
-    readonly updateContext: Event.Event<Partial<Context>>;
+    readonly navigate: Event.Event<NavigateOptions<RouterController<Group>, RoutePath<RouterController<Group>>>>;
     readonly addBlocker: Event.Event<Blocker>;
     readonly removeBlocker: Event.Event<Blocker>;
   };
@@ -519,16 +526,14 @@ export interface RouterShape<
     readonly state: Store.Store<RouterState<RoutesOf<Group>>>;
     readonly location: Store.Combined<ParsedLocation>;
     readonly matches: Store.Combined<ReadonlyArray<RouteMatch<RoutesOf<Group>>>>;
-    readonly api: Store.Store<RouterController<Group, Context>>;
+    readonly api: Store.Store<RouterController<Group>>;
   };
   readonly ui: {
     readonly state: Store.Store<RouterState<RoutesOf<Group>>>;
     readonly location: Store.Combined<ParsedLocation>;
     readonly matches: Store.Combined<ReadonlyArray<RouteMatch<RoutesOf<Group>>>>;
-    readonly navigate: Event.Event<NavigateOptions<RouterController<Group, Context>, RoutePath<RouterController<Group, Context>>>>;
-    readonly preload: Event.Event<ToOptions<RouterController<Group, Context>, RoutePath<RouterController<Group, Context>>>>;
-    readonly invalidate: Event.Event<void>;
-    readonly api: Store.Store<RouterController<Group, Context>>;
+    readonly navigate: Event.Event<NavigateOptions<RouterController<Group>, RoutePath<RouterController<Group>>>>;
+    readonly api: Store.Store<RouterController<Group>>;
   };
 }
 
@@ -538,43 +543,90 @@ type RouterServicesForGroup<Group extends AnyRouteGroup> = RoutesOf<Group> exten
     : never
   : never;
 
+/** The ports one route's unit exposes: occupancy and the decoded
+ * params/search — `false`/`Option.none()` while the route is not on screen.
+ * The engine's raw `RouteMatch` record stays internal to the router. */
+export interface RouteUnitShape<R extends Route.Any> extends Model.Shape {
+  readonly inputs: Record<never, never>;
+  readonly outputs: {
+    readonly opened: Store.Combined<boolean>;
+    readonly params: Store.Combined<Option.Option<Route.Params<R>>>;
+    readonly search: Store.Combined<Option.Option<Route.Search<R>>>;
+    readonly provided: Store.Combined<Option.Option<Route.Provided<R>>>;
+  };
+  readonly ui: {
+    readonly opened: Store.Combined<boolean>;
+    readonly params: Store.Combined<Option.Option<Route.Params<R>>>;
+    readonly search: Store.Combined<Option.Option<Route.Search<R>>>;
+    readonly provided: Store.Combined<Option.Option<Route.Provided<R>>>;
+  };
+}
+
+export type RouteIds<Group extends AnyRouteGroup> = Route.Id<RoutesOf<Group>>;
+
+/** The per-key shape map of {@link RoutesModel}: each route id maps to the
+ * unit shape of THAT route, so `Model.get(router.routes, "user")` comes back
+ * with `params`/`search` typed by the "user" route's schemas. */
+export type RouteShapes<Group extends AnyRouteGroup> = {
+  readonly [Id in RouteIds<Group>]: RouteUnitShape<Extract<RoutesOf<Group>, { readonly id: Id }>>;
+};
+
+/** The keyed model behind `router.routes`: one unit per route id, derived
+ * from the router's `outputs.matches`. */
+export interface RoutesModel<
+  Id extends string = string,
+  Group extends AnyRouteGroup = AnyRouteGroup,
+> extends Model.ServiceClass<
+    RoutesModel<Id, Group>,
+    `${Id}/routes`,
+    RouteIds<Group>,
+    RouteUnitShape<RoutesOf<Group>>,
+    never,
+    RouterModel<Id, Group> | Registry
+  > {
+  readonly modelShapes: RouteShapes<Group>;
+}
+
 export interface RouterModel<
   Id extends string = string,
   Group extends AnyRouteGroup = AnyRouteGroup,
-  Context extends SearchRecord = SearchRecord,
 > extends Model.ServiceClass<
-    RouterModel<Id, Group, Context>,
+    RouterModel<Id, Group>,
     Id,
     void,
-    RouterShape<Group, Context>,
+    RouterShape<Group>,
     never,
     RouterServicesForGroup<Group> | Registry
   > {
   readonly group: Group;
-  readonly routes: ReadonlyArray<RoutesOf<Group>>;
-  readonly options: RouterOptions<Context>;
+  /** One `Model.get(router.routes, "<id>")` away from a route's typed unit:
+   * `outputs.opened`/`params`/`search`, narrowed to that id. */
+  readonly routes: RoutesModel<Id, Group>;
+  /** Provides BOTH services: the router itself and its `routes` model. */
+  readonly layer: Layer.Layer<
+    RouterModel<Id, Group> | RoutesModel<Id, Group>,
+    never,
+    Exclude<RouterServicesForGroup<Group>, Registry> | Registry
+  >;
+  readonly options: RouterOptions;
   readonly routerType: {
     readonly id: Id;
     readonly group: Group;
-    readonly context: Context;
   };
 }
 
-export type AnyRouter = RouterModel<string, AnyRouteGroup, SearchRecord>;
+// `any` (not `string`/`AnyRouteGroup`) so a concrete RouterModel satisfies
+// the constraint: `Self` occurs in `layer: Layer<Self>`, whose variance
+// otherwise rejects narrowing the group parameter.
+export type AnyRouter = RouterModel<any, any>;
 export type RegisteredRouter = Register extends { readonly router: infer R extends AnyRouter }
   ? R
   : AnyRouter;
 export type RouterGroupOf<TRouter> =
-  TRouter extends RouterModel<any, infer Group, any>
+  TRouter extends RouterModel<any, infer Group>
     ? Group
-    : TRouter extends RouterController<infer Group, any>
+    : TRouter extends RouterController<infer Group>
       ? Group
-      : never;
-export type RouterContextOf<TRouter> =
-  TRouter extends RouterModel<any, any, infer RouterContext>
-    ? RouterContext
-    : TRouter extends RouterController<any, infer RouterContext>
-      ? RouterContext
       : never;
 export type RouterRoutes<TRouter> = RoutesOf<RouterGroupOf<TRouter>>;
 export type RoutePath<TRouter> = RouterRoutes<TRouter> extends infer R
@@ -589,34 +641,29 @@ export type MatchUnion<TRouter> = RouterRoutes<TRouter> extends infer R
     ? RouteMatch<R>
     : never
   : never;
-export interface RouterPortsLike<R extends Route.Any = Route.Any> {
-  readonly outputs: {
-    readonly matches: Store.Source<ReadonlyArray<RouteMatch<R>>>;
-  };
-}
-type RoutesOfPorts<Ports> = Ports extends RouterPortsLike<infer R> ? R : never;
-type MatchByOpenPath<Routes, Path> = Routes extends Route.Any
-  ? Route.Path<Routes> extends Path
-    ? RouteMatch<Routes>
-    : never
-  : never;
-export type RouterControllerOf<M extends AnyRouter> = RouterController<
-  RouterGroupOf<M>,
-  RouterContextOf<M>
->;
+export type RouterControllerOf<M extends AnyRouter> = RouterController<RouterGroupOf<M>>;
 
 type PathParamsFor<TRouter, To> = Route.ParamsInput<RouteByPath<TRouter, To>>;
 type SearchInputFor<TRouter, To> = Route.SearchInput<RouteByPath<TRouter, To>>;
 
-type PathParamOptions<Params> = keyof Params extends never
-  ? { readonly params?: Params | true }
-  : { readonly params: Params | true };
+// `0 extends 1 & T` detects `any`: an erased router (AnyRouter — e.g. the
+// options stored inside RedirectError) must stay lenient, while a concrete
+// router keeps params/search required.
+type IsAny<T> = 0 extends 1 & T ? true : false;
 
-type SearchParamOptions<Search> = keyof Search extends never
+type PathParamOptions<Params> = IsAny<Params> extends true
+  ? { readonly params?: Params | true }
+  : keyof Params extends never
+    ? { readonly params?: Params | true }
+    : { readonly params: Params | true };
+
+type SearchParamOptions<Search> = IsAny<Search> extends true
   ? { readonly search?: Search | true | ((current: RawSearch) => Search) }
-  : RequiredKeys<Search> extends never
+  : keyof Search extends never
     ? { readonly search?: Search | true | ((current: RawSearch) => Search) }
-    : { readonly search: Search | true | ((current: RawSearch) => Search) };
+    : RequiredKeys<Search> extends never
+      ? { readonly search?: Search | true | ((current: RawSearch) => Search) }
+      : { readonly search: Search | true | ((current: RawSearch) => Search) };
 
 export type ToOptions<TRouter extends AnyRouter | AnyRouterController, To extends RoutePath<TRouter>> = {
   readonly to: To;
@@ -637,34 +684,25 @@ export type NavigateOptions<
   readonly mask?: ToOptions<TRouter, RoutePath<TRouter>>;
 };
 
-export class Redirect extends Error {
-  readonly options: any;
-  constructor(options: any) {
-    super("Unitflow router redirect");
-    this.name = "Redirect";
-    this.options = options;
-  }
-}
+/** A middleware/codec verdict, NOT a crash: it travels the typed error
+ * channel purely as the short-circuit — `navigate` catches it and follows
+ * the redirect before anything commits. */
+export class RedirectError extends Data.TaggedError("RedirectError")<{
+  // Typed against the REGISTERED router: after the app's
+  // `declare module ... { interface Register { router: typeof AppRouter } }`
+  // redirect targets are checked exactly like navigate options; without
+  // registration this erases to the lenient AnyRouter form.
+  readonly options: NavigatePayload<RegisteredRouter>;
+}> {}
 
-export class NotFound extends Error {
-  readonly routeId: string | undefined;
-  constructor(routeId?: string) {
-    super("Unitflow router not found");
-    this.name = "NotFound";
-    this.routeId = routeId;
-  }
-}
+export class NotFoundError extends Data.TaggedError("NotFoundError")<{
+  readonly routeId?: string;
+}> {}
 
-export const redirect = <
-  TRouter extends AnyRouter | AnyRouterController = RegisteredRouter,
-  const To extends RoutePath<TRouter> = RoutePath<TRouter>,
->(
-  options: NavigateOptions<TRouter, To>,
-): Redirect => new Redirect(options);
-
-export const notFound = (routeId?: string): NotFound => new NotFound(routeId);
-export const isRedirect = (value: unknown): value is Redirect => value instanceof Redirect;
-export const isNotFound = (value: unknown): value is NotFound => value instanceof NotFound;
+export const isRedirectError = (value: unknown): value is RedirectError =>
+  value instanceof RedirectError;
+export const isNotFoundError = (value: unknown): value is NotFoundError =>
+  value instanceof NotFoundError;
 
 interface CompiledRoute<R extends Route.Any> {
   readonly route: R;
@@ -675,49 +713,86 @@ interface CompiledRoute<R extends Route.Any> {
   readonly length: number;
 }
 
-interface LoaderCacheEntry {
-  readonly value: unknown;
-  readonly updatedAt: number;
-  readonly timer?: ReturnType<typeof setTimeout>;
-}
-
-export const make = <
-  const Id extends string,
-  const Group extends AnyRouteGroup,
-  Context extends SearchRecord = EmptyRecord,
->(
+export const make = <const Id extends string, const Group extends AnyRouteGroup>(
   id: Id,
   routeGroup: Group,
-  options: RouterOptions<Context> = {},
-): RouterModel<Id, Group, Context> => {
-  const service = Model.Service<RouterModel<Id, Group, Context>>()(id)({
+  options: RouterOptions = {},
+): RouterModel<Id, Group> => {
+  // The `routes` model's per-key claim — `Model.get(router.routes, K)`
+  // returns THE route with id K — is only sound if ids are unique: the unit
+  // resolves its route by `find(route.id === key)`. Enforce the
+  // precondition here instead of silently matching the first duplicate.
+  const seenIds = new Set<string>();
+  for (const current of routeGroup.routes) {
+    if (seenIds.has(current.id)) {
+      throw new Error(`Unitflow router "${id}" has duplicate route id "${current.id}".`);
+    }
+    seenIds.add(current.id);
+  }
+
+  const service = Model.Service<RouterModel<Id, Group>>()(id)({
     lifetime: "keepAlive",
     make: () => makeShape(routeGroup, options),
   });
 
-  return Object.assign(service, {
+  const router = Object.assign(service, {
     group: routeGroup,
-    routes: routeGroup.routes as unknown as ReadonlyArray<RoutesOf<Group>>,
     options,
-    routerType: undefined as unknown as RouterModel<Id, Group, Context>["routerType"],
-  }) as RouterModel<Id, Group, Context>;
+    routerType: undefined as unknown as RouterModel<Id, Group>["routerType"],
+  }) as RouterModel<Id, Group>;
+
+  // The per-key shape map is carried by the RoutesModel interface itself
+  // (the cast below) rather than the builder's `Shapes` argument: with
+  // `Group` still generic TypeScript cannot verify the mapped-type
+  // constraint and overload resolution falls apart.
+  const routesService = Model.Service<RoutesModel<Id, Group>>()(
+    `${id}/routes` as `${Id}/routes`,
+  )<RouteIds<Group>>()({
+    make: (routeId: RouteIds<Group>) =>
+      Effect.gen(function* () {
+        const ports = yield* Model.get(router);
+        const match = Store.combine(
+          [ports.outputs.matches],
+          (matches) => Option.fromNullishOr(matches.find((current) => current.route.id === routeId)),
+          { name: `router.routes.${routeId}.match` },
+        );
+        const opened = Store.combine([match], Option.isSome, {
+          name: `router.routes.${routeId}.opened`,
+        });
+        const params = Store.combine([match], Option.map((current) => current.params), {
+          name: `router.routes.${routeId}.params`,
+        });
+        const search = Store.combine([match], Option.map((current) => current.search), {
+          name: `router.routes.${routeId}.search`,
+        });
+        const provided = Store.combine([match], Option.map((current) => current.provided), {
+          name: `router.routes.${routeId}.provided`,
+        });
+        return {
+          inputs: {},
+          outputs: { opened, params, search, provided },
+          ui: { opened, params, search, provided },
+        };
+      }),
+  });
+  const routes = routesService as unknown as RoutesModel<Id, Group>;
+
+  return Object.assign(router, {
+    routes,
+    layer: routes.layer.pipe(Layer.provideMerge(router.layer)),
+  });
 };
 
-const makeShape = <
-  Group extends AnyRouteGroup,
-  Context extends SearchRecord,
->(
+const makeShape = <Group extends AnyRouteGroup>(
   routeGroup: Group,
-  options: RouterOptions<Context>,
-): Effect.Effect<RouterShape<Group, Context>, never, RouterServicesForGroup<Group> | Registry> =>
+  options: RouterOptions,
+): Effect.Effect<RouterShape<Group>, never, RouterServicesForGroup<Group> | Registry> =>
   (Effect.gen(function* () {
     const parseSearch = options.parseSearch ?? defaultParseSearch;
     const stringifySearch = options.stringifySearch ?? defaultStringifySearch;
     const history = options.history ?? createBrowserHistory({ parseSearch });
     const compiled = routeGroup.routes.map(compileRoute).sort((a, b) => b.score - a.score);
     const blockers = new Set<Blocker>();
-    const cache = new Map<string, LoaderCacheEntry>();
-    let context = { ...(options.context ?? {}) } as Context;
     let disposed = false;
     let ignoreNextHistory = false;
 
@@ -797,64 +872,8 @@ const makeShape = <
       >;
     };
 
-    const loaderKey = (current: Route.Any, params: unknown, routeSearch: unknown): string =>
-      `${current.id}:${stableStringify(params)}:${stableStringify(routeSearch)}`;
-
-    const setCached = (key: string, value: unknown, current: Route.Any): void => {
-      const previous = cache.get(key);
-      if (previous?.timer !== undefined) clearTimeout(previous.timer);
-      const gcTime = current.options.gcTime ?? options.defaultGcTime ?? 1_800_000;
-      const entry: LoaderCacheEntry =
-        gcTime === Infinity
-          ? { value, updatedAt: Date.now() }
-          : {
-              value,
-              updatedAt: Date.now(),
-              timer: setTimeout(() => {
-                cache.delete(key);
-              }, gcTime),
-            };
-      cache.set(key, entry);
-    };
-
-    const loadData = (
-      current: Route.Any,
-      routeContext: RouteContext<string, any, any, SearchRecord>,
-      mode: "navigate" | "preload",
-    ): Effect.Effect<unknown, unknown, Route.Services<Route.Any>> => {
-      const loader = current.options.loader;
-      if (loader === undefined) return Effect.succeed(undefined);
-      const key = loaderKey(current, routeContext.params, routeContext.search);
-      const now = Date.now();
-      const cached = cache.get(key);
-      const staleTime =
-        mode === "preload"
-          ? current.options.preloadStaleTime ?? options.defaultPreloadStaleTime ?? 30_000
-          : current.options.staleTime ?? options.defaultStaleTime ?? 0;
-      if (cached !== undefined && (staleTime === Infinity || now - cached.updatedAt < staleTime)) {
-        return Effect.succeed(cached.value);
-      }
-      return Effect.exit(runMaybe(() => loader(routeContext))).pipe(
-        Effect.flatMap((exit) => {
-          if (Exit.isSuccess(exit)) {
-            return Effect.sync(() => {
-              setCached(key, exit.value, current);
-              return exit.value;
-            });
-          }
-          return Effect.flatMap(
-            Effect.sync(() => {
-              cache.delete(key);
-            }),
-            () => Effect.fail(exitToError(exit)),
-          );
-        }),
-      );
-    };
-
     const resolveMatches = (
       location: ParsedLocation,
-      mode: "navigate" | "preload",
     ): Effect.Effect<ReadonlyArray<RouteMatch<RoutesOf<Group>>>, unknown, RouterServicesForGroup<Group>> =>
       Effect.gen(function* () {
         const pathname = stripBasepath(location.pathname, options.basepath);
@@ -870,7 +889,7 @@ const makeShape = <
           )
           .sort((a, b) => b.compiledRoute.score - a.compiledRoute.score);
         const leaf = exactMatches[0];
-        if (leaf === undefined) return yield* Effect.fail(new NotFound());
+        if (leaf === undefined) return yield* Effect.fail(new NotFoundError({}));
 
         const branch = compiled
           .map((compiledRoute) => ({ compiledRoute, match: compiledRoute.prefix.exec(pathname) }))
@@ -888,30 +907,34 @@ const makeShape = <
               a.compiledRoute.score - b.compiledRoute.score,
           );
 
-        let accumulatedContext: SearchRecord = context;
         const matches: Array<RouteMatch<Route.Any>> = [];
+        // Guard results accumulate parent-first down the branch; a guard
+        // shared by several routes in the branch runs once per navigation.
+        let provided: Record<string, unknown> = {};
+        const ranGuards = new Set<AnyMiddleware>();
         for (const item of branch) {
           const rawParams = extractParams(item.compiledRoute, item.match);
           const params = yield* parseParams(item.compiledRoute.route, rawParams as never);
           if (params === false) continue;
           const routeSearch = yield* decodeSearch(item.compiledRoute.route, location.search);
-          const baseContext: RouteContext<string, any, any, SearchRecord> = {
+          const routeContext: RouteContext<string, any, any> = {
             route: item.compiledRoute.route,
             location,
             params,
             search: routeSearch,
-            context: accumulatedContext,
             path: item.compiledRoute.route.path,
           };
-          const before = item.compiledRoute.route.options.beforeLoad;
-          if (before !== undefined) {
-            const next = yield* runMaybe(() => before(baseContext));
-            if (next !== undefined && next !== null && typeof next === "object") {
-              accumulatedContext = { ...accumulatedContext, ...(next as SearchRecord) };
+          // Guards run parent-first, before anything commits: a failure here
+          // (RedirectError/NotFoundError) aborts the whole navigation.
+          for (const middleware of item.compiledRoute.route.middlewares) {
+            if (ranGuards.has(middleware)) continue;
+            ranGuards.add(middleware);
+            const handler = yield* middleware;
+            const value = yield* handler(routeContext);
+            if (value !== undefined && value !== null && typeof value === "object") {
+              provided = { ...provided, ...value };
             }
           }
-          const routeContext = { ...baseContext, context: accumulatedContext };
-          const loaderData = yield* loadData(item.compiledRoute.route, routeContext, mode);
           const meta = item.compiledRoute.route.options.meta?.(routeContext) ?? [];
           const links = item.compiledRoute.route.options.links?.(routeContext) ?? [];
           matches.push({
@@ -920,8 +943,7 @@ const makeShape = <
             pathname: item.match[0] === "" ? "/" : item.match[0],
             params,
             search: routeSearch,
-            context: accumulatedContext,
-            loaderData,
+            provided,
             staticData: item.compiledRoute.route.options.staticData ?? {},
             meta,
             links,
@@ -929,7 +951,7 @@ const makeShape = <
           });
         }
         if (!matches.some((match) => match.route === leaf.compiledRoute.route)) {
-          return yield* Effect.fail(new NotFound());
+          return yield* Effect.fail(new NotFoundError({}));
         }
         return matches as unknown as ReadonlyArray<RouteMatch<RoutesOf<Group>>>;
       });
@@ -937,17 +959,14 @@ const makeShape = <
     const load = (
       location: ParsedLocation,
       displayLocation: ParsedLocation,
-      mode: "navigate" | "preload",
     ): Effect.Effect<ReadonlyArray<RouteMatch<RoutesOf<Group>>>, unknown, RouterServicesForGroup<Group> | Registry> =>
       Effect.gen(function* () {
-        if (mode === "navigate") {
-          yield* setState({
-            ...currentState,
-            status: "pending",
-            pendingLocation: displayLocation,
-          });
-        }
-        return yield* resolveMatches(location, mode);
+        yield* setState({
+          ...currentState,
+          status: "pending",
+          pendingLocation: displayLocation,
+        });
+        return yield* resolveMatches(location);
       });
 
     const encodeParams = (
@@ -990,8 +1009,8 @@ const makeShape = <
       return Effect.succeed(definition.encode(resolvedSearch as never));
     };
 
-    const buildLocationEffect = <const To extends RoutePath<RouterController<Group, Context>>>(
-      toOptions: ToOptions<RouterController<Group, Context>, To>,
+    const buildLocationEffect = <const To extends RoutePath<RouterController<Group>>>(
+      toOptions: ToOptions<RouterController<Group>, To>,
     ): Effect.Effect<ParsedLocation, unknown, RouterServicesForGroup<Group>> => Effect.gen(function* () {
       const foundRoute = routeGroup.routes.find((current) => current.path === toOptions.to);
       if (foundRoute === undefined) {
@@ -1013,8 +1032,8 @@ const makeShape = <
       );
     });
 
-    const buildLocation = <const To extends RoutePath<RouterController<Group, Context>>>(
-      toOptions: ToOptions<RouterController<Group, Context>, To>,
+    const buildLocation = <const To extends RoutePath<RouterController<Group>>>(
+      toOptions: ToOptions<RouterController<Group>, To>,
     ): ParsedLocation => {
       const exit = Effect.runSyncExit(
         buildLocationEffect(toOptions) as Effect.Effect<ParsedLocation, unknown>,
@@ -1023,12 +1042,12 @@ const makeShape = <
       throw exitToError(exit);
     };
 
-    const buildHref = <const To extends RoutePath<RouterController<Group, Context>>>(
-      toOptions: ToOptions<RouterController<Group, Context>, To>,
+    const buildHref = <const To extends RoutePath<RouterController<Group>>>(
+      toOptions: ToOptions<RouterController<Group>, To>,
     ): string => buildLocation(toOptions).href;
 
-    const buildHrefEffect = <const To extends RoutePath<RouterController<Group, Context>>>(
-      toOptions: ToOptions<RouterController<Group, Context>, To>,
+    const buildHrefEffect = <const To extends RoutePath<RouterController<Group>>>(
+      toOptions: ToOptions<RouterController<Group>, To>,
     ): Effect.Effect<string, unknown, RouterServicesForGroup<Group>> =>
       Effect.map(buildLocationEffect(toOptions), (location) => location.href);
 
@@ -1054,7 +1073,7 @@ const makeShape = <
       resolvedLocation?: ParsedLocation,
     ): Effect.Effect<void, never, Registry> =>
       setState({
-        status: isNotFound(error) ? "not-found" : "error",
+        status: isNotFoundError(error) ? "not-found" : "error",
         location: location ?? currentState.location,
         resolvedLocation: resolvedLocation ?? currentState.resolvedLocation,
         matches: location === undefined ? currentState.matches : [],
@@ -1064,7 +1083,7 @@ const makeShape = <
     const commitLocation = (
       location: ParsedLocation,
     ): Effect.Effect<void, never, RouterServicesForGroup<Group> | Registry> =>
-      Effect.exit(load(location, location, "navigate")).pipe(
+      Effect.exit(load(location, location)).pipe(
         Effect.flatMap((exit) => {
           if (Exit.isSuccess(exit)) {
             return setState({
@@ -1074,12 +1093,18 @@ const makeShape = <
               matches: exit.value,
             });
           }
-          return handleError(exitToError(exit), location, location);
+          const error = exitToError(exit);
+          // A middleware redirect on the initial load or a history pop
+          // follows through instead of surfacing as an error state.
+          if (isRedirectError(error)) {
+            return navigate({ ...error.options, replace: true } as never);
+          }
+          return handleError(error, location, location);
         }),
       );
 
-    const navigate = <const To extends RoutePath<RouterController<Group, Context>>>(
-      navigateOptions: NavigateOptions<RouterController<Group, Context>, To>,
+    const navigate = <const To extends RoutePath<RouterController<Group>>>(
+      navigateOptions: NavigateOptions<RouterController<Group>, To>,
     ): Effect.Effect<void, never, RouterServicesForGroup<Group> | Registry> =>
       Effect.gen(function* () {
         const resolvedLocationExit = yield* Effect.exit(buildLocationEffect(navigateOptions));
@@ -1109,7 +1134,7 @@ const makeShape = <
           window.location.assign(displayLocation.href);
           return;
         }
-        const exit = yield* Effect.exit(load(resolvedLocation, displayLocation, "navigate"));
+        const exit = yield* Effect.exit(load(resolvedLocation, displayLocation));
         if (Exit.isSuccess(exit)) {
           ignoreNextHistory = true;
           if (navigateOptions.replace === true) history.replace(displayLocation.href, displayLocation.state);
@@ -1126,38 +1151,15 @@ const makeShape = <
           return;
         }
         const error = exitToError(exit);
-        if (isRedirect(error)) {
+        if (isRedirectError(error)) {
           yield* navigate({ ...error.options, replace: true } as never);
           return;
         }
         yield* handleError(error);
       });
 
-    const preload = <const To extends RoutePath<RouterController<Group, Context>>>(
-      toOptions: ToOptions<RouterController<Group, Context>, To>,
-    ): Effect.Effect<void, never, RouterServicesForGroup<Group> | Registry> => {
-      return Effect.exit(buildLocationEffect(toOptions)).pipe(
-        Effect.flatMap((exit) => {
-          if (Exit.isFailure(exit)) return handleError(exitToError(exit));
-          const location = exit.value;
-          return Effect.exit(load(location, location, "preload")).pipe(
-            Effect.flatMap((loadExit) => {
-              if (
-                Exit.isSuccess(loadExit) ||
-                isNotFound(exitToError(loadExit)) ||
-                isRedirect(exitToError(loadExit))
-              ) {
-                return Effect.void;
-              }
-              return handleError(exitToError(loadExit));
-            }),
-          );
-        }),
-      );
-    };
-
-    const matchRoute = <const To extends RoutePath<RouterController<Group, Context>>>(
-      matchOptions: ToOptions<RouterController<Group, Context>, To> & ActiveOptions,
+    const matchRoute = <const To extends RoutePath<RouterController<Group>>>(
+      matchOptions: ToOptions<RouterController<Group>, To> & ActiveOptions,
     ): boolean => {
       const location = buildLocation(matchOptions);
       const current = currentState.resolvedLocation;
@@ -1172,36 +1174,23 @@ const makeShape = <
       return true;
     };
 
-    const invalidate = (): Effect.Effect<void, never, RouterServicesForGroup<Group> | Registry> =>
-      Effect.gen(function* () {
-        for (const entry of cache.values()) {
-          if (entry.timer !== undefined) clearTimeout(entry.timer);
-        }
-        cache.clear();
-        const exit = yield* Effect.exit(load(currentState.resolvedLocation, currentState.location, "navigate"));
-        if (Exit.isSuccess(exit)) {
-          yield* setState({
-            status: "success",
-            location: currentState.location,
-            resolvedLocation: currentState.resolvedLocation,
-            matches: exit.value,
-          });
-        } else {
-          yield* handleError(exitToError(exit));
-        }
+    const addBlocker = (blocker: Blocker): Effect.Effect<void> =>
+      Effect.sync(() => {
+        blockers.add(blocker);
+      });
+
+    const removeBlocker = (blocker: Blocker): Effect.Effect<void> =>
+      Effect.sync(() => {
+        blockers.delete(blocker);
       });
 
     const dispose = (): Effect.Effect<void> =>
       Effect.sync(() => {
         disposed = true;
         blockers.clear();
-        for (const entry of cache.values()) {
-          if (entry.timer !== undefined) clearTimeout(entry.timer);
-        }
-        cache.clear();
       });
 
-    const controller: RouterController<Group, Context> = {
+    const controller: RouterController<Group> = {
       group: routeGroup,
       routes: routeGroup.routes as unknown as ReadonlyArray<RoutesOf<Group>>,
       options,
@@ -1210,50 +1199,17 @@ const makeShape = <
       buildHref,
       buildLocationEffect,
       buildHrefEffect,
-      navigate,
-      preload,
       matchRoute,
-      invalidate,
-      updateContext(nextContext) {
-        return Effect.sync(() => {
-          context = { ...context, ...nextContext };
-        });
-      },
-      block(blocker) {
-        return Effect.sync(() => {
-          blockers.add(blocker);
-          return {
-            unblock: Effect.sync(() => {
-              blockers.delete(blocker);
-            }),
-          };
-        });
-      },
-      unblock(blocker) {
-        return Effect.sync(() => {
-          blockers.delete(blocker);
-        });
-      },
-      dispose,
     };
 
     const navigateEvent = yield* Event.make<
-      NavigateOptions<RouterController<Group, Context>, RoutePath<RouterController<Group, Context>>>
-    >({ name: "router.navigate" }).pipe(Event.handler((payload) => controller.navigate(payload as never)));
-    const preloadEvent = yield* Event.make<
-      ToOptions<RouterController<Group, Context>, RoutePath<RouterController<Group, Context>>>
-    >({ name: "router.preload" }).pipe(Event.handler((payload) => controller.preload(payload as never)));
-    const invalidateEvent = yield* Event.make({ name: "router.invalidate" }).pipe(
-      Event.handler(() => controller.invalidate()),
-    );
-    const updateContextEvent = yield* Event.make<Partial<Context>>({
-      name: "router.updateContext",
-    }).pipe(Event.handler((payload) => controller.updateContext(payload)));
+      NavigateOptions<RouterController<Group>, RoutePath<RouterController<Group>>>
+    >({ name: "router.navigate" }).pipe(Event.handler((payload) => navigate(payload as never)));
     const addBlockerEvent = yield* Event.make<Blocker>({ name: "router.addBlocker" }).pipe(
-      Event.handler((blocker) => Effect.asVoid(controller.block(blocker))),
+      Event.handler((blocker) => addBlocker(blocker)),
     );
     const removeBlockerEvent = yield* Event.make<Blocker>({ name: "router.removeBlocker" }).pipe(
-      Event.handler((blocker) => controller.unblock(blocker)),
+      Event.handler((blocker) => removeBlocker(blocker)),
     );
 
     const location = Store.combine([state], (value) => value.location, {
@@ -1291,9 +1247,6 @@ const makeShape = <
     return {
       inputs: {
         navigate: navigateEvent,
-        preload: preloadEvent,
-        invalidate: invalidateEvent,
-        updateContext: updateContextEvent,
         addBlocker: addBlockerEvent,
         removeBlocker: removeBlockerEvent,
       },
@@ -1308,12 +1261,10 @@ const makeShape = <
         location,
         matches,
         navigate: navigateEvent,
-        preload: preloadEvent,
-        invalidate: invalidateEvent,
         api,
       },
     };
-  }) as Effect.Effect<RouterShape<Group, Context>, never, RouterServicesForGroup<Group> | Registry>);
+  }) as Effect.Effect<RouterShape<Group>, never, RouterServicesForGroup<Group> | Registry>);
 
 const exitToError = (exit: Exit.Exit<unknown, unknown>): unknown => {
   if (Exit.isSuccess(exit)) return undefined;
@@ -1333,8 +1284,6 @@ const getController = <M extends AnyRouter>(
     return yield* Store.get(ports.outputs.api);
   }) as unknown as Effect.Effect<RouterControllerOf<M>, never, Context.Service.Identifier<M> | Registry>);
 
-export const controller = getController;
-
 export const buildLocation = <M extends AnyRouter, const To extends RoutePath<M>>(
   router: M,
   options: ToOptions<M, To>,
@@ -1353,114 +1302,11 @@ export const buildHref = <M extends AnyRouter, const To extends RoutePath<M>>(
   Context.Service.Identifier<M> | Registry | RouterServicesForGroup<RouterGroupOf<M>>
 > => Effect.flatMap(getController(router), (api) => api.buildHrefEffect(options as never));
 
-export const navigate = <M extends AnyRouter, const To extends RoutePath<M>>(
-  router: M,
-  options: NavigateOptions<M, To>,
-): Effect.Effect<
-  void,
-  never,
-  Context.Service.Identifier<M> | Registry | RouterServicesForGroup<RouterGroupOf<M>>
-> => Effect.flatMap(getController(router), (api) => api.navigate(options as never));
-
-export const preload = <M extends AnyRouter, const To extends RoutePath<M>>(
-  router: M,
-  options: ToOptions<M, To>,
-): Effect.Effect<
-  void,
-  never,
-  Context.Service.Identifier<M> | Registry | RouterServicesForGroup<RouterGroupOf<M>>
-> => Effect.flatMap(getController(router), (api) => api.preload(options as never));
-
 export const matchRoute = <M extends AnyRouter, const To extends RoutePath<M>>(
   router: M,
   options: ToOptions<M, To> & ActiveOptions,
 ): Effect.Effect<boolean, never, Context.Service.Identifier<M> | Registry> =>
   Effect.map(getController(router), (api) => api.matchRoute(options as never));
-
-export const invalidate = <M extends AnyRouter>(
-  router: M,
-): Effect.Effect<
-  void,
-  never,
-  Context.Service.Identifier<M> | Registry | RouterServicesForGroup<RouterGroupOf<M>>
-> => Effect.flatMap(getController(router), (api) => api.invalidate());
-
-export const updateContext = <M extends AnyRouter>(
-  router: M,
-  context: Partial<RouterContextOf<M>>,
-): Effect.Effect<void, never, Context.Service.Identifier<M> | Registry> =>
-  Effect.flatMap(getController(router), (api) => api.updateContext(context));
-
-export const block = <M extends AnyRouter>(
-  router: M,
-  blocker: Blocker,
-): Effect.Effect<RouterBlocker, never, Context.Service.Identifier<M> | Registry> =>
-  Effect.flatMap(getController(router), (api) => api.block(blocker));
-
-const isRouterPorts = (value: unknown): value is RouterPortsLike =>
-  typeof value === "object" && value !== null && "outputs" in value;
-
-const currentFromPorts = <Ports extends RouterPortsLike>(
-  router: Ports,
-): Store.Combined<RouteMatch<RoutesOfPorts<Ports>> | undefined> =>
-  Store.combine(
-    [router.outputs.matches],
-    (matches) => matches.at(-1) as RouteMatch<RoutesOfPorts<Ports>> | undefined,
-    { name: "router.current" },
-  );
-
-const openedFromPorts = <
-  Ports extends RouterPortsLike,
-  const Path extends Route.Path<RoutesOfPorts<Ports>>,
->(
-  router: Ports,
-  path: Path,
-): Store.Combined<MatchByOpenPath<RoutesOfPorts<Ports>, Path> | undefined> =>
-  Store.combine(
-    [router.outputs.matches],
-    (matches) =>
-      matches.find((match) => match.route.path === path) as
-        | MatchByOpenPath<RoutesOfPorts<Ports>, Path>
-        | undefined,
-    { name: `router.opened:${path}` },
-  );
-
-export function current<M extends AnyRouter>(
-  router: M,
-): Effect.Effect<
-  Store.Combined<MatchUnion<M> | undefined>,
-  never,
-  Context.Service.Identifier<M> | Registry
->;
-export function current<Ports extends RouterPortsLike>(
-  router: Ports,
-): Store.Combined<RouteMatch<RoutesOfPorts<Ports>> | undefined>;
-export function current(router: any): any {
-  if (isRouterPorts(router)) return currentFromPorts(router);
-  return Effect.map(Model.get(router), (ports) => currentFromPorts(ports as unknown as RouterPortsLike));
-}
-
-export function opened<M extends AnyRouter, const Path extends RoutePath<M>>(
-  router: M,
-  path: Path,
-): Effect.Effect<
-  Store.Combined<MatchByPath<M, Path> | undefined>,
-  never,
-  Context.Service.Identifier<M> | Registry
->;
-export function opened<
-  Ports extends RouterPortsLike,
-  const Path extends Route.Path<RoutesOfPorts<Ports>>,
->(
-  router: Ports,
-  path: Path,
-): Store.Combined<MatchByOpenPath<RoutesOfPorts<Ports>, Path> | undefined>;
-export function opened(router: any, path: string): any {
-  if (isRouterPorts(router)) return openedFromPorts(router, path);
-  return Effect.map(Model.get(router), (ports) =>
-    openedFromPorts(ports as unknown as RouterPortsLike, path),
-  );
-}
 
 export const createMemoryHistory = (options?: {
   readonly initialEntries?: ReadonlyArray<string>;

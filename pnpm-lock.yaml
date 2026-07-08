@@ -169,6 +169,74 @@ importers:
         specifier: 8.1.3
         version: 8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(yaml@2.9.0)
 
+  examples/ts/router-basic:
+    dependencies:
+      '@unitflow/devtools':
+        specifier: workspace:*
+        version: link:../../../packages/devtools
+      '@unitflow/react':
+        specifier: workspace:*
+        version: link:../../../packages/react
+      '@unitflow/router':
+        specifier: workspace:*
+        version: link:../../../packages/router
+      effect:
+        specifier: 4.0.0-beta.88
+        version: 4.0.0-beta.88
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
+    devDependencies:
+      '@types/react':
+        specifier: 19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vite:
+        specifier: 8.1.3
+        version: 8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(yaml@2.9.0)
+
+  examples/ts/router-guard:
+    dependencies:
+      '@unitflow/devtools':
+        specifier: workspace:*
+        version: link:../../../packages/devtools
+      '@unitflow/react':
+        specifier: workspace:*
+        version: link:../../../packages/react
+      '@unitflow/router':
+        specifier: workspace:*
+        version: link:../../../packages/router
+      effect:
+        specifier: 4.0.0-beta.88
+        version: 4.0.0-beta.88
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
+    devDependencies:
+      '@types/react':
+        specifier: 19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vite:
+        specifier: 8.1.3
+        version: 8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(yaml@2.9.0)
+
   packages/benchmarks:
     dependencies:
       '@preact/signals-core':
@@ -238,6 +306,31 @@ importers:
       '@unitflow/core':
         specifier: workspace:^
         version: link:../core
+    devDependencies:
+      '@effect/vitest':
+        specifier: 4.0.0-beta.88
+        version: 4.0.0-beta.88(effect@4.0.0-beta.88)(vitest@3.2.4(@types/debug@4.1.13)(@types/node@24.13.2)(lightningcss@1.32.0)(yaml@2.9.0))
+      '@types/react':
+        specifier: '*'
+        version: 19.2.17
+      effect:
+        specifier: 4.0.0-beta.88
+        version: 4.0.0-beta.88
+      react:
+        specifier: '*'
+        version: 19.2.7
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@24.13.2)(lightningcss@1.32.0)(yaml@2.9.0)
+
+  packages/router:
+    dependencies:
+      '@unitflow/core':
+        specifier: workspace:^
+        version: link:../core
+      '@unitflow/react':
+        specifier: workspace:^
+        version: link:../react
     devDependencies:
       '@effect/vitest':
         specifier: 4.0.0-beta.88

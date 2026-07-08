@@ -14,17 +14,14 @@
     "./react": {
       "types": "./dist/react.d.ts",
       "default": "./dist/react.js"
-    },
-    "./router": {
-      "types": "./dist/router.d.ts",
-      "default": "./dist/router.js"
     }
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "vitest run"
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "tsc -p tsconfig.test.json && vitest run"
   },
   "dependencies": {
     "@unitflow/core": "workspace:^",

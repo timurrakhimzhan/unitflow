@@ -5,6 +5,12 @@ import * as Router from "./router.js";
 type Controller<M extends Router.AnyRouter> = Router.RouterControllerOf<M>;
 
 export interface BoundRouter<M extends Router.AnyRouter = Router.RegisteredRouter> {
+  /** Phantom inference anchor: every other occurrence of `M` here sits
+   * behind a conditional type (`RouterRoutes<M>` etc.) TypeScript cannot
+   * invert, so without this marker `M` silently falls back to its default
+   * and `Link`/`MatchRoute` props stop being route-typed. Never set at
+   * runtime. */
+  readonly "~model"?: M;
   readonly state: Router.RouterState<Router.RouterRoutes<M>>;
   readonly location: Router.ParsedLocation;
   readonly matches: ReadonlyArray<Router.MatchUnion<M>>;
@@ -12,18 +18,19 @@ export interface BoundRouter<M extends Router.AnyRouter = Router.RegisteredRoute
   readonly navigate: (
     options: Router.NavigateOptions<Controller<M>, Router.RoutePath<Controller<M>>>,
   ) => void;
-  readonly preload: (
-    options: Router.ToOptions<Controller<M>, Router.RoutePath<Controller<M>>>,
-  ) => void;
-  readonly invalidate: () => void;
 }
 
 export type RouteComponent<
   M extends Router.AnyRouter = Router.RegisteredRouter,
   Match extends Router.RouteMatch = Router.MatchUnion<M>,
+  Units = void,
 > = (props: {
   readonly router: BoundRouter<M>;
   readonly match: Match;
+  /** Child units the OWNING view passed through `RouterView`'s `units`
+   * prop — the model-first way for a route view to reach its page model:
+   * the parent leases and republishes, the view only receives. */
+  readonly units: Units;
   readonly children: React.ReactNode;
 }) => React.ReactNode;
 
@@ -31,79 +38,128 @@ type BoundaryComponent<M extends Router.AnyRouter = Router.RegisteredRouter> = (
   readonly router: BoundRouter<M>;
   readonly match?: Router.RouteMatch;
   readonly error?: unknown;
-  readonly children?: React.ReactNode;
 }) => React.ReactNode;
 
-export interface MatchesProps<M extends Router.AnyRouter = Router.RegisteredRouter> {
+type RouteById<M extends Router.AnyRouter, Id> = Extract<
+  Router.RouterRoutes<M>,
+  { readonly id: Id }
+>;
+
+/**
+ * The one place a router meets rendering: a route only declares `model` (or
+ * nothing) — never a component. This map supplies the actual view for each
+ * route id, plus the pending/error/not-found boundaries, entirely outside
+ * `@unitflow/router` itself. Keys are constrained to the router's actual
+ * route ids (a typo will not compile), and each view's `match` is narrowed
+ * to ITS route's params/search types.
+ */
+export interface RouterViews<
+  M extends Router.AnyRouter = Router.RegisteredRouter,
+  Units = void,
+> {
+  readonly routes: {
+    readonly [Id in Router.RouteIds<Router.RouterGroupOf<M>>]?: RouteComponent<
+      M,
+      Router.RouteMatch<RouteById<M, Id>>,
+      Units
+    >;
+  };
+  readonly pending?: BoundaryComponent<M>;
+  readonly error?: BoundaryComponent<M>;
+  readonly notFound?: BoundaryComponent<M>;
+}
+
+export interface MatchesProps<
+  M extends Router.AnyRouter = Router.RegisteredRouter,
+  Units = void,
+> {
   readonly router: BoundRouter<M>;
+  readonly views: RouterViews<M, Units>;
+  readonly units: Units;
 }
 
-export function Matches<M extends Router.AnyRouter = Router.RegisteredRouter>({
+const renderBoundary = <M extends Router.AnyRouter>(
+  Component: BoundaryComponent<M> | undefined,
+  router: BoundRouter<M>,
+  state: Router.RouterState<Router.RouterRoutes<M>>,
+): React.ReactNode => {
+  if (Component === undefined) return null;
+  const match = state.matches.at(-1) as unknown as Router.RouteMatch | undefined;
+  return match === undefined
+    ? <Component router={router} error={state.error} />
+    : <Component router={router} match={match} error={state.error} />;
+};
+
+export function Matches<M extends Router.AnyRouter = Router.RegisteredRouter, Units = void>({
   router,
-}: MatchesProps<M>): React.ReactNode {
+  views,
+  units,
+}: MatchesProps<M, Units>): React.ReactNode {
   const state = router.state as Router.RouterState<Router.RouterRoutes<M>>;
-  if (state.status === "error") return renderError(router, state);
-  if (state.status === "not-found") return renderNotFound(router, state);
-  if (state.status === "pending" && state.matches.length === 0) return renderPending(router);
-  return <MatchRenderer router={router} state={state} index={0} />;
+  if (state.status === "error") return renderBoundary(views.error, router, state);
+  if (state.status === "not-found") return renderBoundary(views.notFound, router, state);
+  if (state.status === "pending" && state.matches.length === 0) {
+    return views.pending === undefined ? null : <>{views.pending({ router })}</>;
+  }
+  return <MatchRenderer router={router} views={views} units={units} state={state} index={0} />;
 }
 
-const makeRouterView = <M extends Router.AnyRouter>(
+/** The extra prop the router view takes when its views need child units:
+ * absent for `Units = void`, required otherwise. */
+type UnitsProp<Units> = [Units] extends [void]
+  ? { readonly units?: undefined }
+  : { readonly units: Units };
+
+const makeRouterView = <M extends Router.AnyRouter, Units = void>(
   router: M,
-): React.FC<ViewProps<M>> =>
-  UnitView.make(
+  views: RouterViews<M, Units>,
+): React.FC<ViewProps<M> & UnitsProp<Units>> => {
+  const Bound = UnitView.make(
     router as never,
-    (bound) => <Matches router={bound as BoundRouter<M>} />,
-  ) as React.FC<ViewProps<M>>;
+    (bound, extra: { readonly forwardedUnits: Units }) => (
+      <Matches router={bound as BoundRouter<M>} views={views} units={extra.forwardedUnits} />
+    ),
+  );
+  const Component = (props: ViewProps<M> & UnitsProp<Units>): React.ReactNode => (
+    <Bound unit={props.unit as never} forwardedUnits={props.units as Units} />
+  );
+  Component.displayName = "RouterView";
+  return Component;
+};
 
 export const RouterView = { make: makeRouterView };
 export const View = RouterView;
 
-const MatchRenderer = <M extends Router.AnyRouter>({
+const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
   router,
+  views,
+  units,
   state,
   index,
 }: {
   readonly router: BoundRouter<M>;
+  readonly views: RouterViews<M, Units>;
+  readonly units: Units;
   readonly state: Router.RouterState<Router.RouterRoutes<M>>;
   readonly index: number;
 }): React.ReactNode => {
   const match = state.matches[index] as unknown as Router.RouteMatch | undefined;
   if (match === undefined) return null;
-  const Component = match.route.options.component as RouteComponent<M, any> | undefined;
-  const child = <MatchRenderer router={router} state={state} index={index + 1} />;
-  return Component === undefined ? child : <Component router={router} match={match as never}>{child}</Component>;
-};
-
-const renderPending = <M extends Router.AnyRouter>(router: BoundRouter<M>): React.ReactNode => {
-  const Component = router.api.options.defaultPendingComponent as BoundaryComponent<M> | undefined;
-  return Component === undefined ? null : <Component router={router} />;
-};
-
-const renderError = <M extends Router.AnyRouter>(
-  router: BoundRouter<M>,
-  state: Router.RouterState<Router.RouterRoutes<M>>,
-): React.ReactNode => {
-  const match = state.matches.at(-1) as unknown as Router.RouteMatch | undefined;
-  const Component = (match?.route.options.errorComponent ??
-    router.api.options.defaultErrorComponent) as BoundaryComponent<M> | undefined;
-  if (Component === undefined) return null;
-  return match === undefined
-    ? <Component router={router} error={state.error} />
-    : <Component router={router} match={match} error={state.error} />;
-};
-
-const renderNotFound = <M extends Router.AnyRouter>(
-  router: BoundRouter<M>,
-  state: Router.RouterState<Router.RouterRoutes<M>>,
-): React.ReactNode => {
-  const match = state.matches.at(-1) as unknown as Router.RouteMatch | undefined;
-  const Component = (match?.route.options.notFoundComponent ??
-    router.api.options.defaultNotFoundComponent) as BoundaryComponent<M> | undefined;
-  if (Component === undefined) return null;
-  return match === undefined
-    ? <Component router={router} error={state.error} />
-    : <Component router={router} match={match} error={state.error} />;
+  // The runtime id is erased to `string`; the map itself is keyed strictly.
+  // eslint-disable-next-line revizo/no-type-assertion
+  const Component = (
+    views.routes as Readonly<Record<string, RouteComponent<M, any, Units> | undefined>>
+  )[match.route.id];
+  const child = (
+    <MatchRenderer router={router} views={views} units={units} state={state} index={index + 1} />
+  );
+  return Component === undefined ? (
+    child
+  ) : (
+    <Component router={router} match={match as never} units={units}>
+      {child}
+    </Component>
+  );
 };
 
 type AnchorProps = Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, "children" | "href">;
@@ -124,13 +180,11 @@ export type LinkProps<
     readonly children?: React.ReactNode | ((state: LinkState) => React.ReactNode);
     readonly activeProps?: StateProps | (() => StateProps);
     readonly inactiveProps?: StateProps | (() => StateProps);
-    readonly preload?: false | "intent" | "viewport" | "render" | true;
-    readonly preloadDelay?: number;
   };
 
 export type LinkComponent = <
   M extends Router.AnyRouter = Router.RegisteredRouter,
-  To extends Router.RoutePath<M> = Router.RoutePath<M>,
+  const To extends Router.RoutePath<M> = Router.RoutePath<M>,
 >(
   props: LinkProps<M, To> & { readonly ref?: React.Ref<HTMLAnchorElement> },
 ) => React.ReactElement;
@@ -140,36 +194,14 @@ export const Link = React.forwardRef<HTMLAnchorElement, LinkProps<any, any>>(fun
     router,
     activeProps,
     inactiveProps,
-    preload,
-    preloadDelay,
     children,
     onClick,
-    onFocus,
-    onMouseEnter,
-    onTouchStart,
     ...rest
   } = props;
 
   const href = router.api.buildHref(rest as never);
   const isActive = router.api.matchRoute(rest as never);
   const stateProps = resolveStateProps(isActive ? activeProps : inactiveProps);
-  const preloadMode = preload === true ? "intent" : preload ?? router.api.options.defaultPreload;
-  const delay = preloadDelay ?? 50;
-
-  const runPreload = (): void => {
-    if (preloadMode === false || preloadMode === undefined) return;
-    const timeout = preloadMode === "intent" ? delay : 0;
-    globalThis.setTimeout(() => {
-      router.preload(rest as never);
-    }, timeout);
-  };
-
-  const handleIntent = <E extends React.SyntheticEvent<HTMLAnchorElement>,>(
-    handler: ((event: E) => void) | undefined,
-  ) => (event: E): void => {
-    handler?.(event);
-    if (!event.defaultPrevented && preloadMode === "intent") runPreload();
-  };
 
   const handleClick = (event: React.MouseEvent<HTMLAnchorElement>): void => {
     onClick?.(event);
@@ -189,9 +221,6 @@ export const Link = React.forwardRef<HTMLAnchorElement, LinkProps<any, any>>(fun
       ref={ref}
       data-status={isActive ? "active" : undefined}
       onClick={handleClick}
-      onFocus={handleIntent(onFocus)}
-      onMouseEnter={handleIntent(onMouseEnter)}
-      onTouchStart={handleIntent(onTouchStart)}
     >
       {renderedChildren}
     </a>
@@ -240,7 +269,7 @@ export type MatchRouteProps<
 
 export function MatchRoute<
   M extends Router.AnyRouter = Router.RegisteredRouter,
-  To extends Router.RoutePath<M> = Router.RoutePath<M>,
+  const To extends Router.RoutePath<M> = Router.RoutePath<M>,
 >(props: MatchRouteProps<M, To>): React.ReactNode {
   const { router, children, ...rest } = props;
   const isActive = router.api.matchRoute(rest as never);
@@ -250,7 +279,7 @@ export function MatchRoute<
 
 export type CreatedLinkComponent = <
   M extends Router.AnyRouter = Router.RegisteredRouter,
-  To extends Router.RoutePath<M> = Router.RoutePath<M>,
+  const To extends Router.RoutePath<M> = Router.RoutePath<M>,
 >(
   props: LinkProps<M, To> & { readonly ref?: React.Ref<HTMLAnchorElement> },
 ) => React.ReactElement;
