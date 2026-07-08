@@ -20,7 +20,6 @@ export const AppRouter = Router.make(
   Router.group(HomeRoute, LoginRoute).merge(
     Router.group(AdminRoute).middleware(AuthGuard),
   ),
-  { history: Router.createBrowserHistory() },
 );
 
 declare module "@unitflow/router" {

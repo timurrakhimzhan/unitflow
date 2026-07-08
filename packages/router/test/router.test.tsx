@@ -31,14 +31,13 @@ const routeGroup = Router.group(HomeRoute, UserRoute).merge(
 
 let nextRouter = 0;
 
-const makeRouter = (initial = "/") =>
-  Router.make(`/test/router/${++nextRouter}`, routeGroup, {
-    history: Router.createMemoryHistory({ initialEntries: [initial] }),
-  });
+const makeRouter = () => Router.make(`/test/router/${++nextRouter}`, routeGroup);
 
-const PageQueryRouter = Router.make("/test/router/page-query", routeGroup, {
-  history: Router.createMemoryHistory({ initialEntries: ["/"] }),
-});
+/** Registry + an in-memory history: what every router test provides. */
+const testEnv = (initial = "/") =>
+  Layer.mergeAll(Registry.layer, Router.memoryHistoryLayer({ initialEntries: [initial] }));
+
+const PageQueryRouter = Router.make("/test/router/page-query", routeGroup);
 
 // Registering the app router types RedirectError targets exactly like
 // navigate options (unregistered apps stay lenient).
@@ -112,7 +111,7 @@ describe("@unitflow/router", () => {
       assert.strictEqual(match?.route.id, "user");
       assert.deepStrictEqual(match?.params, { id: 42 });
       assert.deepStrictEqual(match?.search, { page: 2 });
-    }).pipe(Effect.provide(AppRouter.layer.pipe(Layer.provideMerge(Registry.layer))));
+    }).pipe(Effect.provide(AppRouter.layer.pipe(Layer.provideMerge(testEnv()))));
   });
 
   it.effect("builds prefixed group links through Effect dependency injection", () => {
@@ -120,7 +119,7 @@ describe("@unitflow/router", () => {
     return Effect.gen(function* () {
       const href = yield* Router.buildHref(AppRouter, { to: "/admin/settings" });
       assert.strictEqual(href, "/admin/settings");
-    }).pipe(Effect.provide(AppRouter.layer.pipe(Layer.provideMerge(Registry.layer))));
+    }).pipe(Effect.provide(AppRouter.layer.pipe(Layer.provideMerge(testEnv()))));
   });
 
   it.effect("exposes navigation as model ports", () => {
@@ -143,11 +142,11 @@ describe("@unitflow/router", () => {
         api.buildHref({ to: "/users/:id", params: { id: 8 }, search: { page: 4 } }),
         "/users/8?page=4",
       );
-    }).pipe(Effect.provide(AppRouter.layer.pipe(Layer.provideMerge(Registry.layer))));
+    }).pipe(Effect.provide(AppRouter.layer.pipe(Layer.provideMerge(testEnv()))));
   });
 
   it.effect("exposes every route as a keyed unit with typed ports", () => {
-    const testLayer = PageQueryRouter.layer.pipe(Layer.provideMerge(Registry.layer));
+    const testLayer = PageQueryRouter.layer.pipe(Layer.provideMerge(testEnv()));
 
     return Effect.gen(function* () {
       const router = yield* Model.get(PageQueryRouter);
@@ -209,7 +208,7 @@ describe("@unitflow/router", () => {
     const testLayer = UserRouteQueryModel.layer.pipe(
       Layer.provideMerge(PageQueryRouter.layer),
       Layer.provideMerge(Layer.succeed(UserEndpoint, endpoint)),
-      Layer.provideMerge(Registry.layer),
+      Layer.provideMerge(testEnv()),
     );
 
     return Effect.gen(function* () {
@@ -262,9 +261,7 @@ describe("@unitflow/router", () => {
     const guardedGroup = Router.group(OpenRoute).merge(
       Router.group(AdminRoute).middleware(AdminGuard),
     );
-    const GuardedRouter = Router.make("/test/router/guarded", guardedGroup, {
-      history: Router.createMemoryHistory({ initialEntries: ["/"] }),
-    });
+    const GuardedRouter = Router.make("/test/router/guarded", guardedGroup);
 
     let user: string | undefined = undefined;
     const guardLayer = AdminGuard.make((context) =>
@@ -284,7 +281,7 @@ describe("@unitflow/router", () => {
     const testLayer = GuardedRouter.layer.pipe(
       Layer.provideMerge(guardLayer),
       Layer.provideMerge(Layer.succeed(Gate, Gate.of({ currentUser: () => user }))),
-      Layer.provideMerge(Registry.layer),
+      Layer.provideMerge(testEnv()),
     );
 
     return Effect.gen(function* () {
@@ -416,9 +413,7 @@ describe("@unitflow/router", () => {
 
   it("types route params, search, and model-bound links", () => {
     const TypedRouter = makeRouter();
-    const OtherRouter = Router.make("/test/router/other", routeGroup, {
-      history: Router.createMemoryHistory({ initialEntries: ["/"] }),
-    });
+    const OtherRouter = Router.make("/test/router/other", routeGroup);
     const bound = undefined as unknown as BoundRouter<typeof TypedRouter>;
 
     const hrefEffect: Effect.Effect<string, unknown, any> = Router.buildHref(TypedRouter, {
@@ -444,7 +439,7 @@ describe("@unitflow/router", () => {
         to: "/users/:id",
         params: { id: 1 },
         search: { page: 1 },
-      }).pipe(Effect.provide(OtherRouter.layer.pipe(Layer.provideMerge(Registry.layer))));
+      }).pipe(Effect.provide(OtherRouter.layer.pipe(Layer.provideMerge(testEnv()))));
       void wrongDi;
     }
 

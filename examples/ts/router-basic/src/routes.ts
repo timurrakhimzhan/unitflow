@@ -16,7 +16,6 @@ export const UserRoute = Router.route("user", {
 export const AppRouter = Router.make(
   "@unitflow/example/router-basic/router",
   Router.group(HomeRoute, UsersRoute, UserRoute),
-  { history: Router.createBrowserHistory() },
 );
 
 /** Registering the router types every erased payload — e.g. RedirectError

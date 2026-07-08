@@ -459,11 +459,59 @@ export interface RouterState<R extends Route.Any = Route.Any> {
 }
 
 export interface RouterOptions {
-  readonly history?: RouterHistory;
   readonly basepath?: string;
   readonly parseSearch?: (search: string) => RawSearch;
   readonly stringifySearch?: (search: SearchRecord) => string;
 }
+
+/** What the {@link History} service holds: a factory rather than a ready
+ * history, because a history builds `ParsedLocation`s and therefore needs
+ * the owning router's `parseSearch`. Each router calls it once, so two
+ * routers under one layer get independent histories. */
+export interface HistoryFactory {
+  readonly make: (options: {
+    readonly parseSearch: (search: string) => RawSearch;
+  }) => RouterHistory;
+}
+
+/**
+ * The history capability, provided as a LAYER — `Router.make` declares
+ * routes only, the environment decides how locations are read and written:
+ *
+ * ```ts
+ * AppRouter.layer.pipe(Layer.provideMerge(Router.browserHistoryLayer))
+ * // tests:
+ * AppRouter.layer.pipe(Layer.provideMerge(Router.memoryHistoryLayer({ initialEntries: ["/"] })))
+ * ```
+ */
+export class History extends Context.Service<History, HistoryFactory>()(
+  "@unitflow/router/History",
+) {}
+
+export const browserHistoryLayer: Layer.Layer<History> = Layer.succeed(
+  History,
+  History.of({ make: (options) => createBrowserHistory(options) }),
+);
+
+export const hashHistoryLayer: Layer.Layer<History> = Layer.succeed(
+  History,
+  History.of({ make: (options) => createHashHistory(options) }),
+);
+
+export const memoryHistoryLayer = (options?: {
+  readonly initialEntries?: ReadonlyArray<string>;
+}): Layer.Layer<History> =>
+  Layer.succeed(
+    History,
+    History.of({
+      make: ({ parseSearch }) =>
+        createMemoryHistory(
+          options?.initialEntries === undefined
+            ? { parseSearch }
+            : { initialEntries: options.initialEntries, parseSearch },
+        ),
+    }),
+  );
 
 export interface ActiveOptions {
   readonly exact?: boolean;
@@ -596,17 +644,19 @@ export interface RouterModel<
     void,
     RouterShape<Group>,
     never,
-    RouterServicesForGroup<Group> | Registry
+    RouterServicesForGroup<Group> | History | Registry
   > {
   readonly group: Group;
   /** One `Model.get(router.routes, "<id>")` away from a route's typed unit:
    * `outputs.opened`/`params`/`search`, narrowed to that id. */
   readonly routes: RoutesModel<Id, Group>;
-  /** Provides BOTH services: the router itself and its `routes` model. */
+  /** Provides BOTH services: the router itself and its `routes` model.
+   * Requires the {@link History} capability — provide
+   * `browserHistoryLayer`/`hashHistoryLayer`/`memoryHistoryLayer`. */
   readonly layer: Layer.Layer<
     RouterModel<Id, Group> | RoutesModel<Id, Group>,
     never,
-    Exclude<RouterServicesForGroup<Group>, Registry> | Registry
+    Exclude<RouterServicesForGroup<Group>, Registry> | History | Registry
   >;
   readonly options: RouterOptions;
   readonly routerType: {
@@ -786,11 +836,11 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
 const makeShape = <Group extends AnyRouteGroup>(
   routeGroup: Group,
   options: RouterOptions,
-): Effect.Effect<RouterShape<Group>, never, RouterServicesForGroup<Group> | Registry> =>
+): Effect.Effect<RouterShape<Group>, never, RouterServicesForGroup<Group> | History | Registry> =>
   (Effect.gen(function* () {
     const parseSearch = options.parseSearch ?? defaultParseSearch;
     const stringifySearch = options.stringifySearch ?? defaultStringifySearch;
-    const history = options.history ?? createBrowserHistory({ parseSearch });
+    const history = (yield* History).make({ parseSearch });
     const compiled = routeGroup.routes.map(compileRoute).sort((a, b) => b.score - a.score);
     const blockers = new Set<Blocker>();
     let disposed = false;
@@ -1264,7 +1314,7 @@ const makeShape = <Group extends AnyRouteGroup>(
         api,
       },
     };
-  }) as Effect.Effect<RouterShape<Group>, never, RouterServicesForGroup<Group> | Registry>);
+  }) as Effect.Effect<RouterShape<Group>, never, RouterServicesForGroup<Group> | History | Registry>);
 
 const exitToError = (exit: Exit.Exit<unknown, unknown>): unknown => {
   if (Exit.isSuccess(exit)) return undefined;

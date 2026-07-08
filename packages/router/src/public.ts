@@ -31,7 +31,12 @@ export {
   buildLocation,
   buildHref,
   matchRoute,
-  // histories
+  // histories — provided as layers; the create* factories stay exported for
+  // custom History implementations
+  History,
+  browserHistoryLayer,
+  hashHistoryLayer,
+  memoryHistoryLayer,
   createMemoryHistory,
   createBrowserHistory,
   createHashHistory,
@@ -62,6 +67,7 @@ export type {
   RoutesOf,
   ParsedLocation,
   RouterHistory,
+  HistoryFactory,
   RouteMatch,
   RouterState,
   RouterOptions,
