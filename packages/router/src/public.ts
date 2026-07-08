@@ -73,7 +73,7 @@ export type {
   RouterShape,
   RouterModel,
   RouterTargets,
-  RoutesModel,
+  RouteModel,
   PagesModel,
   AnyPagesModel,
   PagesShape,

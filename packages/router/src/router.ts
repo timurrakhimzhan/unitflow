@@ -609,7 +609,7 @@ export interface RouteUnitShape<R extends Route.Any> extends Model.Shape {
 
 export type RouteIds<Group extends AnyRouteGroup> = Route.Id<RoutesOf<Group>>;
 
-/** The per-key shape map of {@link RoutesModel}: each route id maps to the
+/** The per-key shape map of {@link RouteModel}: each route id maps to the
  * unit shape of THAT route, so `Model.get(router.routes, "user")` comes back
  * with `params`/`search` typed by the "user" route's schemas. */
 export type RouteShapes<Group extends AnyRouteGroup> = {
@@ -678,11 +678,11 @@ export type AnyPagesModel = PagesModel<any, any, any>;
 
 /** The keyed model behind `router.routes`: one unit per route id, derived
  * from the router's `outputs.matches`. */
-export interface RoutesModel<
+export interface RouteModel<
   Id extends string = string,
   Group extends AnyRouteGroup = AnyRouteGroup,
 > extends Model.ServiceClass<
-    RoutesModel<Id, Group>,
+    RouteModel<Id, Group>,
     `${Id}/routes`,
     RouteIds<Group>,
     RouteUnitShape<RoutesOf<Group>>,
@@ -841,7 +841,7 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
   options: RouterOptions = {},
 ): {
   readonly model: RouterModel<Id, Group> & RouterTargets<Id, Group>;
-  readonly routes: RoutesModel<Id, Group>;
+  readonly routes: RouteModel<Id, Group>;
 } => {
   // The `routes` model's per-key claim — `Model.get(router.routes, K)`
   // returns THE route with id K — is only sound if ids are unique: the unit
@@ -866,11 +866,11 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
     routerType: undefined as unknown as RouterModel<Id, Group>["routerType"],
   }) as RouterModel<Id, Group>;
 
-  // The per-key shape map is carried by the RoutesModel interface itself
+  // The per-key shape map is carried by the RouteModel interface itself
   // (the cast below) rather than the builder's `Shapes` argument: with
   // `Group` still generic TypeScript cannot verify the mapped-type
   // constraint and overload resolution falls apart.
-  const routesService = Model.Service<RoutesModel<Id, Group>>()(
+  const routesService = Model.Service<RouteModel<Id, Group>>()(
     `${id}/routes` as `${Id}/routes`,
   )<RouteIds<Group>>()({
     make: (routeId: RouteIds<Group>) =>
@@ -900,7 +900,7 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
         };
       }),
   });
-  const routes = routesService as unknown as RoutesModel<Id, Group>;
+  const routes = routesService as unknown as RouteModel<Id, Group>;
 
   const model = Object.assign(router, {
     buildLocation: (options: ToOptions<RouterController<Group>, RoutePath<RouterController<Group>>>) =>

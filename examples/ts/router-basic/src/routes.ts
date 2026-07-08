@@ -18,7 +18,7 @@ export const UserRoute = Router.route("user", {
 });
 
 /** Router.make births BOTH models at once; the app only names them. */
-export const { model: NavigationModel, routes: AppRoutes } = Router.make(
+export const { model: NavigationModel, routes: RouteModel } = Router.make(
   "@unitflow/example/router-basic/router",
   Router.group(HomeRoute, UsersRoute, UserRoute),
 );
@@ -36,7 +36,7 @@ export class UsersPageModel extends Model.Service<UsersPageModel>()(
 )({
   make: () =>
     Effect.gen(function* () {
-      const unit = yield* Model.get(AppRoutes, "users");
+      const unit = yield* Model.get(RouteModel, "users");
       const list = yield* Query.make({
         stores: { opened: unit.outputs.opened },
         handler: ({ opened }) =>
@@ -62,7 +62,7 @@ export class UserPageModel extends Model.Service<UserPageModel>()(
 )({
   make: () =>
     Effect.gen(function* () {
-      const unit = yield* Model.get(AppRoutes, "user");
+      const unit = yield* Model.get(RouteModel, "user");
       const user = yield* Query.make({
         stores: { params: unit.outputs.params },
         handler: ({ params }) =>
