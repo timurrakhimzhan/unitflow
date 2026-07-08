@@ -33,30 +33,14 @@ export type RouteComponent<
   readonly children: React.ReactNode;
 }) => React.ReactNode;
 
-/** A route entry that stitches a page MODEL to its view in one place —
- * created with `RouterView.page(Model, view)`. The view receives the
- * model's unit as `page`; route data (params/search) flows through the
- * model's own ports, the model-first way. */
-export interface PageEntry<
-  Mo extends Model.AnyService = Model.AnyService,
-  M extends Router.AnyRouter = Router.AnyRouter,
-> {
-  readonly model: Mo;
-  readonly view: (props: {
-    readonly page: Model.PortsOf<Mo>;
-    readonly router: BoundRouter<M>;
-    readonly children: React.ReactNode;
-  }) => React.ReactNode;
+/** A model-bound view (what `View.make` returns): dropping it straight
+ * into the routes map makes the router lease its model and hand the unit
+ * back in — `user: UserPage` is the whole stitching. Deliberately typed
+ * WITHOUT a call signature: a second callable union member would destroy
+ * contextual typing of plain function entries. */
+export interface ModelViewEntry {
+  readonly model: Model.AnyService;
 }
-
-const makePageEntry = <Mo extends Model.AnyService>(
-  model: Mo,
-  view: (props: {
-    readonly page: Model.PortsOf<Mo>;
-    readonly router: BoundRouter<Router.RegisteredRouter>;
-    readonly children: React.ReactNode;
-  }) => React.ReactNode,
-): PageEntry<Mo> => ({ model, view: view as PageEntry<Mo>["view"] });
 
 type BoundaryComponent<M extends Router.AnyRouter = Router.RegisteredRouter> = (props: {
   readonly router: BoundRouter<M>;
@@ -86,7 +70,7 @@ export interface RouterViews<
   readonly routes: {
     readonly [Id in Router.RouteIds<Router.RouterGroupOf<M>>]?:
       | RouteComponent<M, Router.RouteMatch<RouteById<M, Id>>, Units>
-      | PageEntry<any, M>;
+      | ModelViewEntry;
   };
   readonly pending?: BoundaryComponent<M>;
   readonly error?: BoundaryComponent<M>;
@@ -160,8 +144,8 @@ const makeRouterView = <M extends Router.AnyRouter, Units = void>(
   // its pages model around them.
   const pageModels: Record<string, Model.AnyService> = {};
   for (const [routeId, entry] of Object.entries(views.routes)) {
-    if (typeof entry === "object" && entry !== null && "model" in entry) {
-      pageModels[routeId] = (entry as PageEntry<Model.AnyService, M>).model;
+    if (typeof entry === "function" && "model" in entry) {
+      pageModels[routeId] = (entry as ModelViewEntry).model;
     }
   }
   const pagesModel = router.pages(pageModels as never);
@@ -202,7 +186,7 @@ const makeRouterView = <M extends Router.AnyRouter, Units = void>(
   return Object.assign(Component, { model: pagesModel }) as never;
 };
 
-export const RouterView = { make: makeRouterView, page: makePageEntry };
+export const RouterView = { make: makeRouterView };
 export const View = RouterView;
 
 const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
@@ -226,7 +210,7 @@ const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
   // eslint-disable-next-line revizo/no-type-assertion
   const entry = (
     views.routes as Readonly<
-      Record<string, RouteComponent<M, any, Units> | PageEntry<Model.AnyService, M> | undefined>
+      Record<string, RouteComponent<M, any, Units> | ModelViewEntry | undefined>
     >
   )[match.route.id];
   const child = (
@@ -240,19 +224,21 @@ const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
     />
   );
   if (entry === undefined) return child;
-  if (typeof entry === "function") {
-    const RouteView = entry;
+  if ("model" in entry) {
+    // A model-bound view: its unit was leased by the pages model.
+    const PageView = entry as unknown as React.FC<{
+      readonly unit: unknown;
+      readonly children?: React.ReactNode;
+    }>;
     return (
-      <RouteView router={router} match={match as never} units={units}>
-        {child}
-      </RouteView>
+      <PageView unit={pages[match.route.id]}>{child}</PageView>
     );
   }
-  const PageView = entry.view;
+  const RouteView = entry;
   return (
-    <PageView page={pages[match.route.id] as never} router={router}>
+    <RouteView router={router} match={match as never} units={units}>
       {child}
-    </PageView>
+    </RouteView>
   );
 };
 

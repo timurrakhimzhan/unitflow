@@ -62,9 +62,9 @@ const UserPage = View.make(UserPageModel, ({ user, params, search }) => {
   );
 });
 
-/** ONE map stitches routes, models, and views: a plain function is just a
- * view (with its route's narrowed `match`), `RouterView.page(Model, view)`
- * ties a page model to its view — the model's unit arrives as `page`. */
+/** ONE map stitches routes, models, and views: a plain function is a view
+ * (with its route's narrowed `match`), a View.make component IS its own
+ * entry — the router leases its model and hands the unit back in. */
 export const AppView = RouterView.make(AppRouter, {
   routes: {
     home: ({ children }) => (
@@ -76,8 +76,8 @@ export const AppView = RouterView.make(AppRouter, {
         {children ?? <p className="muted">Pick a page — data loads when its route opens.</p>}
       </main>
     ),
-    users: RouterView.page(UsersPageModel, ({ page }) => <UsersPage unit={page} />),
-    user: RouterView.page(UserPageModel, ({ page }) => <UserPage unit={page} />),
+    users: UsersPage,
+    user: UserPage,
   },
   notFound: () => <div className="state">404</div>,
 });

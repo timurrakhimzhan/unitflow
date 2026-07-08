@@ -126,7 +126,7 @@ const boundId = (unit: object): number => {
 const makeView = <M extends Model.Viewable, P extends object = Record<never, never>>(
   model: M,
   render: (units: BoundUi<Model.PortsOf<M>["ui"]>, props: P) => React.ReactNode,
-): React.FC<ViewProps<M> & P> => {
+): React.FC<ViewProps<M> & P> & { readonly model: M } => {
   // Keyed by the ports object, so a Bound instance always sees one and the
   // same ui record: it is created once in `make` and never mutated, hence the
   // per-entry hooks below keep a fixed order for the component's lifetime.
@@ -158,7 +158,9 @@ const makeView = <M extends Model.Viewable, P extends object = Record<never, nev
     return <Bound key={boundId(unit)} ui={unit.ui} extra={extra as P} />;
   };
   Component.displayName = `View(${model.modelKey})`;
-  return Component;
+  // The view carries its model: composition layers (e.g. a router's views
+  // map) can lease the model themselves and hand the unit back in.
+  return Object.assign(Component, { model });
 };
 
 /**
