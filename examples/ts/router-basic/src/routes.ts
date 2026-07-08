@@ -7,10 +7,15 @@ import { UsersApi } from "./api";
 
 const userParams = Schema.Struct({ id: Schema.NumberFromString });
 const userSearch = Schema.Struct({ page: Schema.NumberFromString });
+/** An OBJECT inside the query string: one JSON-encoded param. */
+const usersFilter = Schema.Struct({ role: Schema.String });
+const usersSearch = Schema.Struct({
+  filter: Schema.optionalKey(Schema.fromJsonString(usersFilter)),
+});
 
 /** Routes declare paths and codecs only. */
 export const HomeRoute = Router.route("home", { path: "/" });
-export const UsersRoute = Router.route("users", { path: "/users" });
+export const UsersRoute = Router.route("users", { path: "/users", search: usersSearch });
 export const UserRoute = Router.route("user", {
   path: "/users/:id",
   params: userParams,
@@ -38,19 +43,25 @@ export class UsersPageModel extends Model.Service<UsersPageModel>()(
     Effect.gen(function* () {
       const unit = yield* Model.get(RouteModel, "users");
       const list = yield* Query.make({
-        stores: { opened: unit.outputs.opened },
-        handler: ({ opened }) =>
+        // The decoded search object is a plain dependency: changing
+        // ?filter={"role":...} re-runs the query.
+        stores: { opened: unit.outputs.opened, search: unit.outputs.search },
+        handler: ({ opened, search }) =>
           opened
             ? Effect.gen(function* () {
                 const api = yield* UsersApi;
-                return yield* api.list();
+                const users = yield* api.list();
+                const role = Option.flatMapNullishOr(search, (s) => s.filter?.role);
+                return Option.isNone(role)
+                  ? users
+                  : users.filter((user) => user.role === role.value);
               })
             : Effect.fail("closed" as const),
       });
       return {
         inputs: {},
         outputs: { list: list.state },
-        ui: { list: list.state, reload: list.refresh },
+        ui: { list: list.state, search: unit.outputs.search, reload: list.refresh },
       };
     }),
 }) {}

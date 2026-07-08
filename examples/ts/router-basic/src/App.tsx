@@ -1,5 +1,6 @@
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Option from "effect/Option";
+import type * as React from "react";
 import { View } from "@unitflow/react";
 import { Link, RouterView } from "@unitflow/router/react";
 import type { User } from "./api";
@@ -7,15 +8,36 @@ import { NavigationModel, UserPageModel, UsersPageModel } from "./routes";
 
 const Pending = () => <div className="state">Loading…</div>;
 
-const UsersPage = View.make(UsersPageModel, ({ list, reload }) => {
+const roles = ["Analyst", "Professor"] as const;
+
+const UsersPage = View.make(
+  UsersPageModel,
+  ({ list, search, reload }, { children }: { readonly children?: React.ReactNode }) => {
+  // /users is also the PARENT of /users/:id: when a child match rendered
+  // something, show it instead of the list.
+  if (children !== undefined && children !== null) return <>{children}</>;
   const value = AsyncResult.value(list);
   if (Option.isNone(value)) {
-    return AsyncResult.isFailure(list) ? <div className="state">Closed</div> : <Pending />;
+    // waiting wins: the previous result may be the "closed" failure.
+    return list.waiting || !AsyncResult.isFailure(list) ? (
+      <Pending />
+    ) : (
+      <div className="state">Closed</div>
+    );
   }
   return (
     <section>
       <header className="row">
         <h2>People</h2>
+        {/* An OBJECT in the query string, typed end to end. */}
+        <Link to="/users" search={{}} data-testid="filter-all">
+          All
+        </Link>
+        {roles.map((role) => (
+          <Link key={role} to="/users" search={{ filter: { role } }} data-testid={`filter-${role}`}>
+            {role}
+          </Link>
+        ))}
         <button onClick={() => reload()}>Reload</button>
       </header>
       <ul className="cards">
@@ -31,7 +53,8 @@ const UsersPage = View.make(UsersPageModel, ({ list, reload }) => {
       </ul>
     </section>
   );
-});
+  },
+);
 
 const UserPage = View.make(UserPageModel, ({ user, params, search }) => {
   const value = AsyncResult.value(user);
@@ -41,7 +64,11 @@ const UserPage = View.make(UserPageModel, ({ user, params, search }) => {
     () => 1,
   );
   if (Option.isNone(value) || Option.isNone(id)) {
-    return AsyncResult.isFailure(user) ? <div className="state">Not found</div> : <Pending />;
+    return user.waiting || !AsyncResult.isFailure(user) ? (
+      <Pending />
+    ) : (
+      <div className="state">Not found</div>
+    );
   }
   return (
     <section>

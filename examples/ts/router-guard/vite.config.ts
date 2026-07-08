@@ -10,6 +10,7 @@ export default defineConfig({
     port: 4307,
   },
   preview: {
+    strictPort: true,
     host: "127.0.0.1",
     port: 4407,
   },

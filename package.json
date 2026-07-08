@@ -14,7 +14,8 @@
     "astro:check": "astro check",
     "docs:check": "node scripts/check-docs.mjs && pnpm astro:check && pnpm build",
     "skill:validate": "python3 ${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py skills/unitflow-modeling",
-    "check": "pnpm packages:build && pnpm packages:test && pnpm examples:build && pnpm docs:check && pnpm skill:validate"
+    "check": "pnpm packages:build && pnpm packages:test && pnpm examples:build && pnpm docs:check && pnpm skill:validate",
+    "e2e": "playwright test -c e2e"
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.3",
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "0.9.9",
+    "@playwright/test": "^1.61.1",
     "typescript": "6.0.3"
   }
 }

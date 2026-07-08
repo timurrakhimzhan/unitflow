@@ -1,5 +1,5 @@
 import { Event, Model, Store } from "@unitflow/core";
-import { InstanceScope, Registry, trackPublish } from "@unitflow/core/registry";
+import { InstanceScope, Registry } from "@unitflow/core/registry";
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
@@ -8,7 +8,6 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { type Pipeable, pipeArguments } from "effect/Pipeable";
-import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import type { ParseOptions } from "effect/SchemaAST";
@@ -1389,8 +1388,11 @@ const makeShape = <Group extends AnyRouteGroup>(
         ignoreNextHistory = false;
         return;
       }
-      trackPublish(registry, historyChanged.id);
-      PubSub.publishUnsafe(historyChannel, nextLocation);
+      // The FULL dispatch step: counting, pubsub AND handler delivery. A
+      // bare trackPublish+publishUnsafe pair feeds subscribers but never the
+      // attached handler — history-driven navigation (back/forward, manual
+      // URL) would silently do nothing.
+      Event.dispatchUnsafe(registry, historyChannel, historyChanged, nextLocation);
     });
     yield* Effect.addFinalizer(() =>
       Effect.flatMap(

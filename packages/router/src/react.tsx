@@ -213,16 +213,20 @@ const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
       Record<string, RouteComponent<M, any, Units> | ModelViewEntry | undefined>
     >
   )[match.route.id];
-  const child = (
-    <MatchRenderer
-      router={router}
-      views={views}
-      units={units}
-      pages={pages}
-      state={state}
-      index={index + 1}
-    />
-  );
+  // `null` (not an empty renderer element) when no deeper match exists, so
+  // a layout's `children ?? fallback` — and a parent page deciding between
+  // its own content and a child's — actually work.
+  const child =
+    index + 1 < state.matches.length ? (
+      <MatchRenderer
+        router={router}
+        views={views}
+        units={units}
+        pages={pages}
+        state={state}
+        index={index + 1}
+      />
+    ) : null;
   if (entry === undefined) return child;
   if ("model" in entry) {
     // A model-bound view: its unit was leased by the pages model.

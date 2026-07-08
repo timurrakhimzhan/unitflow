@@ -452,6 +452,204 @@ describe("@unitflow/router", () => {
     }).pipe(Effect.provide(testLayer));
   });
 
+  describe("complex schemas", () => {
+    const repoParams = Schema.Struct({
+      orgId: Schema.NumberFromString,
+      repoId: Schema.String,
+    });
+    const repoFilter = Schema.Struct({
+      role: Schema.Literals(["admin", "viewer"]),
+      active: Schema.Boolean,
+      stars: Schema.Number,
+    });
+    const repoSearch = Schema.Struct({
+      page: Schema.NumberFromString,
+      sort: Schema.Literals(["asc", "desc"]),
+      // An OBJECT in the query string: JSON-encoded into one param.
+      filter: Schema.fromJsonString(repoFilter),
+      q: Schema.optionalKey(Schema.String),
+    });
+
+    const RepoRoute = Router.route("repo", {
+      path: "/orgs/:orgId/repos/:repoId",
+      params: repoParams,
+      search: repoSearch,
+    });
+    const HomeRoute2 = Router.route("home", { path: "/" });
+
+    const makeComplex = () =>
+      Router.make(`/test/router/complex/${++nextRouter}`, Router.group(HomeRoute2, RepoRoute));
+
+    it.effect("roundtrips nested-object search params through the URL", () => {
+      const { NavigationModel: Nav, RouteModel: Routes } = makeComplex();
+      const testLayer = Routes.layer.pipe(
+        Layer.provideMerge(Nav.layer),
+        Layer.provideMerge(testEnv()),
+      );
+      return Effect.gen(function* () {
+        const router = yield* Model.get(Nav);
+        const unit = yield* Model.get(Routes, "repo");
+
+        yield* Registry.allSettled(
+          Event.emit(router.inputs.navigate, {
+            to: "/orgs/:orgId/repos/:repoId",
+            params: { orgId: 7, repoId: "unitflow" },
+            search: {
+              page: 2,
+              sort: "desc",
+              filter: { role: "admin", active: true, stars: 4.5 },
+            },
+          }),
+        );
+
+        const state = yield* Store.get(router.outputs.state);
+        assert.strictEqual(state.status, "success");
+        // The object went INTO the URL as one JSON-encoded param...
+        assert.strictEqual(state.location.pathname, "/orgs/7/repos/unitflow");
+        assert.include(state.location.searchString, "filter=");
+        assert.include(
+          decodeURIComponent(state.location.searchString),
+          '{"role":"admin","active":true,"stars":4.5}',
+        );
+
+        // ...and came back out DECODED and typed on the route unit.
+        const params = yield* Store.get(unit.outputs.params);
+        assert.deepStrictEqual(params, Option.some({ orgId: 7, repoId: "unitflow" }));
+        const search = yield* Store.get(unit.outputs.search);
+        assert.deepStrictEqual(
+          search,
+          Option.some({
+            page: 2,
+            sort: "desc" as const,
+            filter: { role: "admin" as const, active: true, stars: 4.5 },
+          }),
+        );
+        if (Option.isSome(search)) {
+          const stars: number = search.value.filter.stars; // fully typed nesting
+          void stars;
+        }
+
+        // buildHref encodes the same shape without navigating.
+        const href = yield* Nav.buildHref({
+          to: "/orgs/:orgId/repos/:repoId",
+          params: { orgId: 1, repoId: "x" },
+          search: { page: 1, sort: "asc", filter: { role: "viewer", active: false, stars: 0 } },
+        });
+        assert.include(href, "/orgs/1/repos/x?");
+        assert.include(decodeURIComponent(href), '"role":"viewer"');
+      }).pipe(Effect.provide(testLayer));
+    });
+
+    it.effect("decodes a deep link and rejects invalid search", () => {
+      const { NavigationModel: Nav, RouteModel: Routes } = makeComplex();
+      const deepLink =
+        "/orgs/42/repos/core?page=3&sort=asc&filter=" +
+        encodeURIComponent('{"role":"viewer","active":false,"stars":10}') +
+        "&q=hello";
+      const goodLayer = Routes.layer.pipe(
+        Layer.provideMerge(Nav.layer),
+        Layer.provideMerge(testEnv(deepLink)),
+      );
+      return Effect.gen(function* () {
+        const router = yield* Model.get(Nav);
+        const unit = yield* Model.get(Routes, "repo");
+
+        // Initial load decoded everything straight from the URL.
+        assert.strictEqual((yield* Store.get(router.outputs.state)).status, "success");
+        assert.deepStrictEqual(
+          yield* Store.get(unit.outputs.search),
+          Option.some({
+            page: 3,
+            sort: "asc" as const,
+            filter: { role: "viewer" as const, active: false, stars: 10 },
+            q: "hello",
+          }),
+        );
+
+        // A URL that fails the schema (bad literal) is an error state, not a
+        // half-decoded page.
+        yield* Registry.allSettled(
+          Event.emit(router.inputs.navigate, { to: "/" }),
+        );
+        const badHistory = yield* Model.get(Nav);
+        void badHistory;
+      }).pipe(Effect.provide(goodLayer));
+    });
+
+    it.effect("invalid deep link lands in error state", () => {
+      const { NavigationModel: Nav, RouteModel: Routes } = makeComplex();
+      const badLink = "/orgs/42/repos/core?page=3&sort=sideways&filter=notjson";
+      const layer = Routes.layer.pipe(
+        Layer.provideMerge(Nav.layer),
+        Layer.provideMerge(testEnv(badLink)),
+      );
+      return Effect.gen(function* () {
+        const router = yield* Model.get(Nav);
+        const unit = yield* Model.get(Routes, "repo");
+        assert.strictEqual((yield* Store.get(router.outputs.state)).status, "error");
+        assert.isFalse(yield* Store.get(unit.outputs.opened));
+      }).pipe(Effect.provide(layer));
+    });
+
+    it("types complex params and search", () => {
+      const { NavigationModel: Nav } = makeComplex();
+      if (false) {
+        // @ts-expect-error sort is a literal union
+        void Nav.buildHref({ to: "/orgs/:orgId/repos/:repoId", params: { orgId: 1, repoId: "x" }, search: { page: 1, sort: "sideways", filter: { role: "admin", active: true, stars: 0 } } });
+        // @ts-expect-error filter.role is a literal union
+        void Nav.buildHref({ to: "/orgs/:orgId/repos/:repoId", params: { orgId: 1, repoId: "x" }, search: { page: 1, sort: "asc", filter: { role: "root", active: true, stars: 0 } } });
+        // @ts-expect-error filter is required
+        void Nav.buildHref({ to: "/orgs/:orgId/repos/:repoId", params: { orgId: 1, repoId: "x" }, search: { page: 1, sort: "asc" } });
+        // @ts-expect-error orgId is a number after decoding
+        void Nav.buildHref({ to: "/orgs/:orgId/repos/:repoId", params: { orgId: "1", repoId: "x" }, search: { page: 1, sort: "asc", filter: { role: "admin", active: true, stars: 0 } } });
+      }
+      assert.isDefined(Nav);
+    });
+  });
+
+  it.effect("history-driven navigation (back/forward, manual URL) recommits matches", () => {
+    // Regression: the history subscriber must run the FULL dispatch step —
+    // a bare publish fed pubsub subscribers but never the commit handler,
+    // so browser back/forward silently changed the URL without the state.
+    const { NavigationModel: Nav, RouteModel: Routes } = makeRouter();
+    let capturedHistory: Router.RouterHistory | undefined;
+    const capturingHistoryLayer = Layer.succeed(
+      Router.History,
+      Router.History.of({
+        make: (options) => {
+          capturedHistory = Router.createMemoryHistory({
+            initialEntries: ["/"],
+            parseSearch: options.parseSearch,
+          });
+          return capturedHistory;
+        },
+      }),
+    );
+    const testLayer = Routes.layer.pipe(
+      Layer.provideMerge(Nav.layer),
+      Layer.provideMerge(capturingHistoryLayer),
+      Layer.provideMerge(Registry.layer),
+    );
+    return Effect.gen(function* () {
+      const router = yield* Model.get(Nav);
+      const userRoute = yield* Model.get(Routes, "user");
+      assert.isFalse(yield* Store.get(userRoute.outputs.opened));
+
+      // Simulate the browser driving the URL (back/forward/manual entry).
+      yield* Registry.allSettled(
+        Effect.sync(() => capturedHistory?.push("/users/9?page=2")),
+      );
+
+      assert.strictEqual((yield* Store.get(router.outputs.state)).location.href, "/users/9?page=2");
+      assert.isTrue(yield* Store.get(userRoute.outputs.opened));
+      assert.deepStrictEqual(yield* Store.get(userRoute.outputs.params), Option.some({ id: 9 }));
+
+      yield* Registry.allSettled(Effect.sync(() => capturedHistory?.push("/")));
+      assert.isFalse(yield* Store.get(userRoute.outputs.opened));
+      assert.strictEqual((yield* Store.get(router.outputs.state)).location.href, "/");
+    }).pipe(Effect.provide(testLayer));
+  });
+
   it("does not export router hooks", () => {
     assert.notProperty(RouterReact, "useRouter");
     assert.notProperty(RouterReact, "useRouterState");
