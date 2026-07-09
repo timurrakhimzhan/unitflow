@@ -52,6 +52,32 @@ export const AppView = RouterView.make(AppRouter.model, {
 });
 // #endregion stitch
 
+// #region nested-recipe
+import { ProjectEditModel, ProjectPageModel } from "./models";
+
+const ProjectPage = View.make(
+  ProjectPageModel,
+  ({ params }, { children }: { readonly children?: React.ReactNode }) => (
+    <section>
+      <h2>Project {Option.isSome(params) ? params.value.projectId : ""}</h2>
+      {children ?? <p>Overview.</p>}
+    </section>
+  ),
+);
+
+const ProjectEditView = View.make(ProjectEditModel, () => <p>Edit form…</p>);
+
+// A route's view nests the same way its declaration does — a
+// `{ view, routes }` node, keyed like the route table's own hierarchy.
+// ProjectPage receives ProjectEditView's rendered output as `children` only
+// while "/projects/:projectId/edit" is actually matched — `null` otherwise.
+export const NestedAppView = RouterView.make(AppRouter.model, {
+  routes: {
+    project: { view: ProjectPage, routes: { edit: ProjectEditView } },
+  },
+});
+// #endregion nested-recipe
+
 // #region mount
 import * as React from "react";
 import { createRoot } from "react-dom/client";

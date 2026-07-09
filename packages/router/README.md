@@ -1,13 +1,9 @@
 # @unitflow/router
 
-Effect-native, model-first typed router for Unitflow.
-
-Routes declare paths and codecs — never components, loaders, or data.
-`Router.make` births one `AppRouter`: `model` (the engine — navigation,
-current location), `routeModel` (a keyed per-route model: occupancy and
-decoded params/search), and `layer` (the two, already composed). Page data
-lives in ordinary Unitflow models gated on route ports; React meets the
-router in exactly one place.
+Effect-native, model-first typed router for Unitflow. Routes declare **paths
+and codecs** — never components, loaders, or data; nesting is declared, never
+inferred from a shared path prefix; React meets the router in exactly one
+place.
 
 ## Install
 
@@ -15,25 +11,25 @@ router in exactly one place.
 pnpm add @unitflow/router @unitflow/react @unitflow/core effect@4.0.0-beta.88
 ```
 
-## Routes and models
+## `Router.make`: building the router
+
+`Router.make(id, table)` takes a router id and a table of routes (built from
+`Route.make`/`Route.group`, below) and returns one `AppRouter`:
 
 ```ts
 import * as Schema from "effect/Schema";
 import { Route, Router } from "@unitflow/router";
 
-const userParams = Schema.Struct({ id: Schema.NumberFromString });
-const userSearch = Schema.Struct({ page: Schema.NumberFromString });
-
-export const HomeRoute = Route.make("home", { path: "/" });
-export const UserRoute = Route.make("user", {
+const HomeRoute = Route.make("home", { path: "/" });
+const UserRoute = Route.make("user", {
   path: "/users/:id",
-  params: userParams,
-  search: userSearch,
+  params: Schema.Struct({ id: Schema.NumberFromString }),
 });
 
 export const AppRouter = Router.make("app/router", Route.group(HomeRoute, UserRoute));
 
-// Registering the router types Link/redirect targets everywhere.
+// Registers the router's route table as the default for every typed target
+// in the app — Link props, navigate, redirects — a typo won't compile.
 declare module "@unitflow/router" {
   interface Register {
     readonly router: typeof AppRouter.model;
@@ -41,68 +37,113 @@ declare module "@unitflow/router" {
 }
 ```
 
-- `AppRouter.model` — the engine: `inputs.navigate` (an event, like any
-  model input), `outputs.state`/`location`, `buildHref`/`buildLocation`.
-- `AppRouter.routeModel` — keyed by route id:
-  `Model.get(AppRouter.routeModel, "user")` returns that route's unit with
-  `outputs.opened`/`params`/`search`/`provided` as `Option` ports, narrowed
-  to THAT route's schemas.
-- `AppRouter.layer` — `routeModel.layer` and `model.layer`, already merged;
-  still requires a history layer (`Router.browserHistoryLayer` or
-  `memoryHistoryLayer` in tests), and, for page models reading route ports,
-  their own layers.
+- `AppRouter.model` — the navigation engine: `inputs.navigate` (an event),
+  `outputs.state`/`location`, `buildHref`/`buildLocation`.
+- `AppRouter.routeModel` — keyed by route id: `Model.get(AppRouter.routeModel, "user")`
+  returns that route's unit — `outputs.opened`/`params`/`search`/`provided`,
+  narrowed to **that route's** schemas.
+- `AppRouter.layer` — the two models' layers, already merged. Still needs a
+  history layer (`Router.browserHistoryLayer`, or `memoryHistoryLayer` in
+  tests) and any page models' own layers.
 
-## Nesting: `Route.addChild`
+## `Route.addChild`: one route owns another's content
 
-Nesting is declared, never inferred from a shared path prefix — a route only
-becomes an ancestor of another via `Route.addChild`. The child's `path` is
-relative to the parent's own path, joined on attach:
+A route becomes another's ancestor only if you say so — a route at `/` is
+NOT automatically the parent of every other route just because their paths
+all start with `/`. `Route.addChild(child)` attaches `child` under `self`;
+`child`'s `path` is relative to `self`'s own path, joined on attach:
 
 ```ts
 const EditRoute = Route.make("edit", { path: "/edit" });
 
-export const ProjectRoute = Route.make("project", {
+const ProjectRoute = Route.make("project", {
   path: "/projects/:projectId",
   params: Schema.Struct({ projectId: Schema.NumberFromString }),
 }).pipe(Route.addChild(EditRoute));
-// EditRoute's declared table path is "/projects/:projectId/edit".
+// EditRoute's table path ends up "/projects/:projectId/edit".
 ```
 
-A route with no `addChild` calls has no children — including a route at
-`/`: two routes that happen to share a literal path prefix never nest unless
-this was called explicitly. `Route.layout(id)` covers the other case —
-wrapping *independent* siblings (not one route's own child content) under a
-shared, pathless parent that contributes no URL segment of its own:
+Use this when one route genuinely owns a child's content — a project page
+and its edit sub-view, a list and its detail row.
+
+## `Route.group`: collecting routes into a table
+
+`Route.group(...routes)` collects routes (and, transitively, anything
+attached via `addChild`) into the table `Router.make` consumes:
 
 ```ts
+const allRoutes = Route.group(HomeRoute, UserRoute, ProjectRoute);
+```
+
+Two routes with a shared literal path prefix that were never `addChild`-linked
+simply don't nest — the group is flat unless the hierarchy says otherwise.
+
+## `Route.middleware`: guards as services
+
+`middleware` attaches a guard TAG to every route currently in a group. A
+guard runs **before** a navigation commits — a blocked URL never reaches
+history or state — and its success value (its **Provides**) lands typed in
+the guarded route's `provided` port:
+
+```ts
+class AuthGuard extends Router.Middleware<AuthGuard>()("app/AuthGuard")<{
+  readonly user: string;
+}>() {}
+
+const AuthGuardLive = AuthGuard.layer((context) =>
+  Effect.gen(function* () {
+    const session = yield* SessionService; // the GUARD's dependency, not the router's
+    const user = yield* session.currentUser;
+    if (Option.isNone(user)) {
+      return yield* Effect.fail(new Router.RedirectError({ options: { to: "/login" } }));
+    }
+    void context; // params/search/location of the matched route
+    return { user: user.value };
+  }),
+);
+
+const adminRoutes = Route.group(ProjectRoute).middleware(AuthGuard);
+```
+
+Attaching to a route with declared children (`addChild`/`layout`) guards the
+whole branch — the router walks the explicit ancestor chain, so the guard
+runs once per navigation into that route or any descendant, never for an
+unrelated route that merely shares a path prefix.
+
+## `Route.layout`: a shared shell for independent siblings
+
+`Route.layout(id)` covers the OTHER nesting shape: wrapping routes that
+aren't each other's content — just independent pages sharing one rendering
+or guard scope — under a shared, pathless parent that contributes no URL
+segment of its own:
+
+```ts
+const SettingsRoute = Route.make("settings", { path: "/settings" });
+const ReportsRoute = Route.make("reports", { path: "/reports" });
+
 const dashboard = Route.group(SettingsRoute, ReportsRoute).pipe(Route.layout("dashboard"));
 ```
 
-## Page data: a model gated on route ports
+`addChild` is for one route that owns a child's content; `layout` is for a
+shell around otherwise-unrelated resources.
 
-```ts
-class UserPageModel extends Model.Service<UserPageModel>()("app/UserPage")({
-  make: () =>
-    Effect.gen(function* () {
-      const unit = yield* Model.get(AppRouter.routeModel, "user");
-      const user = yield* Query.make({
-        stores: { params: unit.outputs.params },
-        handler: ({ params }) =>
-          Option.isNone(params)
-            ? Effect.fail("closed" as const)
-            : fetchUser(params.value.id), // id: number — decoded by the schema
-      });
-      return { inputs: {}, outputs: {}, ui: { user: user.state } };
-    }),
-}) {}
-```
+## A few smaller combinators
 
-Entering `/users/1` loads; changing the id reloads; leaving fails the query
-into `"closed"`. No loader, no cache options — the model owns its data.
+- `Route.prefix(path)` — re-roots every route in a group under `path`:
+  `Route.group(SettingsRoute, ReportsRoute).pipe(Route.prefix("/admin"))`.
+- `.merge(...)` — combines groups: `publicRoutes.merge(adminRoutes)`.
+- `.add(...)` — appends routes to a group directly.
+- `Route.search`/`Route.schemaSearch` — build a `search` codec from a plain
+  Schema.Struct or a hand-written encode/decode pair, for query strings a
+  Struct alone can't express.
 
-## React: one meeting point
+## `RouterView.make`: connecting to React
+
+React meets the router in exactly one place: `RouterView.make` takes
+`AppRouter.model` and a map from route ids to views.
 
 ```tsx
+import { View } from "@unitflow/react";
 import { Link, RouterView } from "@unitflow/router/react";
 
 const UserPage = View.make(UserPageModel, ({ user }) => /* AsyncResult → JSX */);
@@ -112,8 +153,7 @@ export const AppView = RouterView.make(AppRouter.model, {
     home: ({ children }) => (
       <main>
         <nav>
-          {/* to/params/search typed against the registered router */}
-          <Link to="/users/:id" params={{ id: 1 }} search={{ page: 1 }}>Ada</Link>
+          <Link to="/users/:id" params={{ id: 1 }}>Ada</Link>
         </nav>
         {children}
       </main>
@@ -122,8 +162,24 @@ export const AppView = RouterView.make(AppRouter.model, {
   },
   notFound: () => <div>404</div>,
 });
+```
 
-// main.tsx — the view carries its root model
+A route with declared children nests its view the same way its declaration
+does — `{ view, routes: { ... } }`, keyed like the route table:
+
+```tsx
+routes: {
+  project: { view: ProjectPage, routes: { edit: ProjectEditView } },
+},
+```
+
+`ProjectPage` receives `ProjectEditView`'s rendered output as `children`
+only while `/projects/:id/edit` is actually matched.
+
+Mount by rooting the tree with `AppView.model` — it owns the navigation
+model and every page model stitched into the map:
+
+```tsx
 const layer = AppView.model.layer.pipe(
   Layer.provideMerge(UserPageModel.layer),
   Layer.provideMerge(AppRouter.layer),
@@ -135,69 +191,17 @@ const layer = AppView.model.layer.pipe(
 </Unitflow>;
 ```
 
-A route with declared children (via `Route.addChild`/`Route.layout`) nests
-its view the same way in the map — `{ view, routes: { ... } }` — mirroring
-the route table instead of being inferred separately:
+## Full docs
 
-```tsx
-routes: {
-  project: { view: ProjectPage, routes: { edit: ProjectEditView } },
-},
-```
+- [Routes and Schemas](https://github.com/timurrakhimzhan/unitflow/blob/main/src/content/docs/router/routes.md) —
+  path/search params, groups, nesting with `Route.addChild`/`Route.layout`.
+- [The AppRouter Models](https://github.com/timurrakhimzhan/unitflow/blob/main/src/content/docs/router/models.md) —
+  `model` vs `routeModel`, navigating, page data as a `Query` gated on route ports.
+- [React](https://github.com/timurrakhimzhan/unitflow/blob/main/src/content/docs/router/react.md) —
+  the views map, nesting it to mirror the route table, mounting.
+- [Middleware](https://github.com/timurrakhimzhan/unitflow/blob/main/src/content/docs/router/middleware.md) —
+  guards as Context services, redirects, typed `Provides`.
 
-`ProjectPage` receives `ProjectEditView`'s rendered output as `children`
-only while `/projects/:id/edit` is actually matched — `null` otherwise, so
-`children ?? <ProjectOverview />` picks between the two. Give the edit view
-its own model that leases `ProjectPageModel` (`Model.get`, a shared
-singleton) for data already loaded by the parent, rather than routing logic
-living inside either model — the two stay sibling page models, and the
-nesting is purely a rendering/URL concern.
-
-## Middleware: guards as services
-
-```ts
-class AuthGuard extends Router.Middleware<AuthGuard>()("app/AuthGuard")<{
-  readonly user: User;
-}>() {}
-
-const AuthGuardLive = AuthGuard.layer((ctx) =>
-  Effect.gen(function* () {
-    const session = yield* SessionService; // the GUARD's dependency, not the router's
-    if (Option.isNone(session.user)) {
-      return yield* Effect.fail(new Router.RedirectError({ options: { to: "/login" } }));
-    }
-    return { user: session.user.value }; // Provides
-  }),
-);
-
-const adminRoutes = Route.group(Dashboard, Users).middleware(AuthGuard);
-```
-
-Guards run BEFORE a navigation commits: a blocked URL never flashes. The
-returned value lands typed in the route unit's `provided` port —
-`Option.some` whenever the route is open, because the guard passing is what
-let it open. Attaching a guard to a route with declared children guards the
-whole branch: `resolveMatches` walks the explicit ancestor chain, so the
-guard runs once per navigation into that route OR any of its descendants —
-never for an unrelated route that merely shares a path prefix.
-
-## Complex search params
-
-Schemas own the URL: literal unions, optional keys, and whole objects
-(JSON-encoded into one param) decode into typed ports and encode back
-through `Link`/`navigate`/`buildHref`.
-
-```ts
-const search = Schema.Struct({
-  sort: Schema.Literals(["asc", "desc"]),
-  filter: Schema.fromJsonString(Schema.Struct({ role: Schema.String })),
-  q: Schema.optionalKey(Schema.String),
-});
-```
-
-## History is a capability
-
-`Router.make` declares routes only; the environment decides how locations
-are read and written: `Router.browserHistoryLayer`,
-`Router.hashHistoryLayer`, or `Router.memoryHistoryLayer({ initialEntries })`
-in tests. Forgetting one is a compile error, not a silent default.
+Or the runnable examples:
+[`router-basic`](https://github.com/timurrakhimzhan/unitflow/tree/main/examples/ts/router-basic),
+[`router-guard`](https://github.com/timurrakhimzhan/unitflow/tree/main/examples/ts/router-guard).

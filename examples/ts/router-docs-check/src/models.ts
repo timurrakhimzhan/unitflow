@@ -76,6 +76,36 @@ const shareLink = Effect.gen(function* () {
 });
 // #endregion href
 
+// #region nested-recipe
+// AppRouter's table declares ProjectRoute.pipe(Route.addChild(EditRoute)) —
+// see routes.ts. The edit view leases ProjectPageModel (Model.get, a shared
+// singleton) for data already loaded by the parent, instead of duplicating
+// the fetch or threading routing logic through either model.
+export class ProjectPageModel extends Model.Service<ProjectPageModel>()("docs/ProjectPage")({
+  make: () =>
+    Effect.gen(function* () {
+      const unit = yield* Model.get(AppRouter.routeModel, "project");
+      // outputs (not just ui): ProjectEditModel leases this model via
+      // Model.get below, and Model.get reads a model's outputs, not its ui.
+      return {
+        inputs: {},
+        outputs: { params: unit.outputs.params },
+        ui: { params: unit.outputs.params },
+      };
+    }),
+}) {}
+
+export class ProjectEditModel extends Model.Service<ProjectEditModel>()("docs/ProjectEdit")({
+  make: () =>
+    Effect.gen(function* () {
+      // ProjectEditModel never touches the route directly — it only reads
+      // ProjectPageModel's already-loaded data.
+      const project = yield* Model.get(ProjectPageModel);
+      return { inputs: {}, outputs: {}, ui: { params: project.outputs.params } };
+    }),
+}) {}
+// #endregion nested-recipe
+
 // #region layers
 import * as Layer from "effect/Layer";
 

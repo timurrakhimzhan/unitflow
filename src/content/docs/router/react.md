@@ -87,41 +87,62 @@ says so explicitly — see the next section.
 A route's view nests the same way its declaration does: a `{ view, routes }`
 node, keyed exactly like the route table's own `Route.addChild`/`Route.layout`
 hierarchy ([Routes](/router/routes/#nesting-routeaddchild-and-routelayout)).
+The route table here declares `ProjectRoute.pipe(Route.addChild(EditRoute))` —
+`/projects/:projectId` owns `/projects/:projectId/edit` as its child page:
+
+```ts
+export class ProjectPageModel extends Model.Service<ProjectPageModel>()("docs/ProjectPage")({
+  make: () =>
+    Effect.gen(function* () {
+      const unit = yield* Model.get(AppRouter.routeModel, "project");
+      // outputs (not just ui): ProjectEditModel leases this model via
+      // Model.get below, and Model.get reads a model's outputs, not its ui.
+      return {
+        inputs: {},
+        outputs: { params: unit.outputs.params },
+        ui: { params: unit.outputs.params },
+      };
+    }),
+}) {}
+
+// Leases ProjectPageModel's already-loaded data (Model.get, a shared
+// singleton) instead of duplicating the fetch or threading routing logic
+// through either model.
+export class ProjectEditModel extends Model.Service<ProjectEditModel>()("docs/ProjectEdit")({
+  make: () =>
+    Effect.gen(function* () {
+      const project = yield* Model.get(ProjectPageModel);
+      return { inputs: {}, outputs: {}, ui: { params: project.outputs.params } };
+    }),
+}) {}
+```
 
 ```tsx
-export const AppView = RouterView.make(AppRouter.model, {
+const ProjectPage = View.make(
+  ProjectPageModel,
+  ({ params }, { children }: { readonly children?: React.ReactNode }) => (
+    <section>
+      <h2>Project {Option.isSome(params) ? params.value.projectId : ""}</h2>
+      {children ?? <p>Overview.</p>}
+    </section>
+  ),
+);
+const ProjectEditView = View.make(ProjectEditModel, () => <p>Edit form…</p>);
+
+export const NestedAppView = RouterView.make(AppRouter.model, {
   routes: {
-    home: HomeView, // no children — unchanged shorthand
     project: { view: ProjectPage, routes: { edit: ProjectEditView } },
   },
 });
 ```
 
 `ProjectPage` receives `ProjectEditView`'s rendered output as `children`
-only while `/projects/:id/edit` is actually matched — `null` otherwise, the
-same `children ?? fallback` shape as before. A node with no `routes` simply
-leaves any deeper match unwrapped, so a leaf entry like `user: UserPage`
-above still works exactly as shown.
+only while `/projects/:projectId/edit` is actually matched — `null`
+otherwise, the same `children ?? fallback` shape as before. A node with no
+`routes` simply leaves any deeper match unwrapped, so a leaf entry like
+`user: UserPage` above still works exactly as shown.
 
-### Recipe: a shared page with an edit sub-view
-
-For "one big page, one small edit view over the same resource," give the
-child its own model that leases the parent's (already-loaded) data instead
-of duplicating the fetch or threading routing logic through either model:
-
-```ts
-export class ProjectEditModel extends Model.Service<ProjectEditModel>()("app/ProjectEdit")({
-  make: () =>
-    Effect.gen(function* () {
-      // Shares ProjectPageModel's already-loaded data — no second fetch,
-      // and ProjectEditModel never touches the route directly.
-      const project = yield* Model.get(ProjectPageModel);
-      return { inputs: {}, outputs: {}, ui: { project: project.outputs.project } };
-    }),
-}) {}
-```
-
-The two stay sibling page models — `ProjectPageModel` doesn't know an edit
+The two page models stay siblings — `ProjectPageModel` doesn't know an edit
 view exists, `ProjectEditModel` doesn't know how it got mounted. Nesting is
 purely a routing/rendering concern, declared once in the route table and
 mirrored once in the views map.
