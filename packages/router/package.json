@@ -1,6 +1,6 @@
 {
   "name": "@unitflow/router",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "description": "Effect-native, Unitflow-aware typed router with React bindings.",
   "license": "MIT",
@@ -16,6 +16,10 @@
     "./react": {
       "types": "./dist/react.d.ts",
       "default": "./dist/react.js"
+    },
+    "./router": {
+      "types": "./dist/router.d.ts",
+      "default": "./dist/router.js"
     }
   },
   "main": "./dist/index.js",
