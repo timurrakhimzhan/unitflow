@@ -78,6 +78,17 @@ export const NestedAppView = RouterView.make(AppRouter.model, {
 });
 // #endregion nested-recipe
 
+// #region bind-components
+export const {
+  Link: BoundLink,
+  Navigate: BoundNavigate,
+  MatchRoute: BoundMatchRoute,
+} = RouterView.bindComponents(AppRouter.model);
+void BoundLink;
+void BoundNavigate;
+void BoundMatchRoute;
+// #endregion bind-components
+
 // #region mount
 import * as React from "react";
 import { createRoot } from "react-dom/client";

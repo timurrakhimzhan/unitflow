@@ -225,9 +225,6 @@ const makeRouterView = <M extends Router.AnyRouter, Units = void>(
   return Object.assign(Component, { model: pagesModel }) as never;
 };
 
-export const RouterView = { make: makeRouterView };
-export const View = RouterView;
-
 /** True for a `{ view, routes }` tree node — distinguished from a bare
  * `RouteComponent`/`ModelViewEntry` entry by NOT being callable: both of
  * those are always functions (a `ModelViewEntry` is `View.make`'s callable
@@ -423,6 +420,35 @@ export function MatchRoute<
   if (typeof children === "function") return children({ isActive });
   return isActive ? children : null;
 }
+
+/** `Link`/`Navigate`/`MatchRoute` pick up their bound router from React
+ * context at runtime — a mechanism TypeScript cannot see through, so their
+ * `to`/`params`/`search` typing needs SOME static source. `Router.Register`
+ * (a `declare module` ambient default) is one; this is the structural
+ * alternative — pass `AppRouter.model` once and get back the SAME runtime
+ * components, just narrowed to that router's type, no ambient state. */
+export interface BoundComponents<M extends Router.AnyRouter> {
+  readonly Link: <const To extends Router.RoutePath<M> = Router.RoutePath<M>>(
+    props: LinkProps<M, To> & { readonly ref?: React.Ref<HTMLAnchorElement> },
+  ) => React.ReactElement;
+  readonly Navigate: <const To extends Router.RoutePath<M> = Router.RoutePath<M>>(
+    props: NavigateProps<M, To>,
+  ) => null;
+  readonly MatchRoute: <const To extends Router.RoutePath<M> = Router.RoutePath<M>>(
+    props: MatchRouteProps<M, To>,
+  ) => React.ReactNode;
+}
+
+/** Re-types the existing `Link`/`Navigate`/`MatchRoute` — not new
+ * components, no behavior change, no runtime cost: `router` is only read
+ * for its TYPE, never touched. */
+const bindComponents = <M extends Router.AnyRouter>(router: M): BoundComponents<M> => {
+  void router;
+  return { Link, Navigate, MatchRoute } as unknown as BoundComponents<M>;
+};
+
+export const RouterView = { make: makeRouterView, bindComponents };
+export const View = RouterView;
 
 export type CreatedLinkComponent = <
   M extends Router.AnyRouter = Router.RegisteredRouter,

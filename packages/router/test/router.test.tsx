@@ -815,4 +815,34 @@ describe("@unitflow/router", () => {
     assert.isDefined(badLink);
     assert.isDefined(UserPanel);
   });
+
+  it("bindComponents narrows Link/Navigate/MatchRoute without a global Register", () => {
+    const { model: TypedRouter } = makeRouter();
+    // The structural alternative to `declare module { Register }`: same
+    // runtime Link/Navigate/MatchRoute, just re-typed to this router — no
+    // ambient state, works even for an app with more than one router.
+    const { Link: BoundLink, Navigate: BoundNavigate, MatchRoute: BoundMatchRoute } =
+      RouterReact.RouterView.bindComponents(TypedRouter);
+
+    const link = (
+      <BoundLink to="/users/:id" params={{ id: 1 }} search={{ page: 1 }}>
+        User
+      </BoundLink>
+    );
+    const nav = <BoundNavigate to="/users/:id" params={{ id: 1 }} search={{ page: 1 }} />;
+    const match = <BoundMatchRoute to="/admin/settings">{() => null}</BoundMatchRoute>;
+
+    if (false) {
+      // @ts-expect-error params are required, same as the un-bound Link
+      const badLink = <BoundLink to="/users/:id" search={{ page: 1 }} />;
+      // @ts-expect-error params use the decoded schema type (number, not string)
+      const badNav = <BoundNavigate to="/users/:id" params={{ id: "1" }} search={{ page: 1 }} />;
+      void badLink;
+      void badNav;
+    }
+
+    assert.isDefined(link);
+    assert.isDefined(nav);
+    assert.isDefined(match);
+  });
 });

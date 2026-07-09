@@ -152,6 +152,27 @@ and intercepts plain left clicks into `navigate`. Under a `RouterView` it
 needs no props beyond the target: the bound router arrives via context, and
 `to`/`params`/`search` are typed by the [registered router](/router/routes/#creating-the-router).
 
+## Typing `Link`/`Navigate`/`MatchRoute` without global registration
+
+`Link`/`Navigate`/`MatchRoute` pick up their bound router from React context
+at **runtime** — TypeScript cannot see through that to type `to`/`params`,
+so it needs SOME static source for which router's route table applies.
+`declare module { Register }` (above) is one: a one-time, app-wide ambient
+default.
+
+`RouterView.bindComponents(router)` is the structural alternative: same
+`Link`/`Navigate`/`MatchRoute`, just re-typed to the router you pass in — no
+`declare module`, no ambient state, and it works for an app with more than
+one router (each bound to its own).
+
+```tsx
+export const { Link, Navigate, MatchRoute } = RouterView.bindComponents(AppRouter.model);
+```
+
+Import THESE from your routes module everywhere instead of the ones from
+`@unitflow/router/react` — `bindComponents` doesn't read `router` at
+runtime (only its type), so this costs nothing beyond the import.
+
 ## Mounting
 
 `RouterView.make` returns a component that carries its own root model:

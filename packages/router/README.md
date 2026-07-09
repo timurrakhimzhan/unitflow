@@ -37,6 +37,9 @@ declare module "@unitflow/router" {
 }
 ```
 
+This ambient registration is optional — `RouterView.bindComponents` (below)
+is the structural alternative, no `declare module` needed.
+
 - `AppRouter.model` — the navigation engine: `inputs.navigate` (an event),
   `outputs.state`/`location`, `buildHref`/`buildLocation`.
 - `AppRouter.routeModel` — keyed by route id: `Model.get(AppRouter.routeModel, "user")`
@@ -190,6 +193,19 @@ const layer = AppView.model.layer.pipe(
   {(pages) => <AppView unit={pages} />}
 </Unitflow>;
 ```
+
+`Link`/`Navigate`/`MatchRoute` pick up their bound router from React context
+at runtime, which TypeScript can't see through — `to`/`params`/`search`
+typing needs some static source. The `declare module { Register }` above is
+one option (ambient, app-wide, zero imports). `RouterView.bindComponents`
+is the structural alternative — same components, re-typed to a router you
+pass in explicitly, no ambient state, works with more than one router:
+
+```tsx
+export const { Link, Navigate, MatchRoute } = RouterView.bindComponents(AppRouter.model);
+```
+
+Import these from your routes module instead of `@unitflow/router/react`'s.
 
 ## Full docs
 
