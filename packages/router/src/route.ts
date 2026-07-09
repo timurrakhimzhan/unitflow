@@ -14,6 +14,16 @@ export {
   type RouteGroup,
   type AnySearchCodec,
   type SearchCodec,
+  // Internal machinery, not meant to be named directly in application code
+  // — exported ONLY so a downstream composite/declaration build can print
+  // them when they surface inside `addChild`/`layout`/`prefix`/`middleware`'s
+  // return types (an unexported type referenced from an exported signature
+  // is a hard TS2742/TS2883 error, not just an inconvenience — see index.ts).
+  type WithChild,
+  type PrefixedTuple,
+  type PrefixedRoute,
+  type WithMiddleware,
+  type MembersOf,
   addChild,
   route as make,
   add,

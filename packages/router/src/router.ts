@@ -355,7 +355,7 @@ export const route = <
  * already-flattened subtree (a child's own previously-attached descendants)
  * under a NEW ancestor's path, mirroring what `flattenRoute` does to the
  * VALUE at runtime by threading the accumulated prefix down. */
-type PrefixedTuple<T extends ReadonlyArray<Route.Any>, Prefix extends string> = {
+export type PrefixedTuple<T extends ReadonlyArray<Route.Any>, Prefix extends string> = {
   readonly [K in keyof T]: PrefixedRoute<T[K], Prefix>;
 };
 
@@ -365,7 +365,7 @@ type PrefixedTuple<T extends ReadonlyArray<Route.Any>, Prefix extends string> = 
 // would type it as `OldTuple & NewTuple`, not the union `Descendants` needs.
 // `Child` (and its own already-attached descendants) get `Route.Path<R>`
 // joined in, matching the runtime path-joining `flattenRoute` performs.
-type WithChild<R extends Route.Any, Child extends Route.Any> = Omit<R, "~children"> & {
+export type WithChild<R extends Route.Any, Child extends Route.Any> = Omit<R, "~children"> & {
   readonly "~children": readonly [
     ...Route.Children<R>,
     PrefixedRoute<Child, Route.Path<R>>,
@@ -398,7 +398,7 @@ export const addChild =
     } as unknown as WithChild<Self, Child>;
   };
 
-type PrefixedRoute<R extends Route.Any, Prefix extends string> = R extends Route<
+export type PrefixedRoute<R extends Route.Any, Prefix extends string> = R extends Route<
   infer Id,
   infer Path,
   infer ParamsSchema,
@@ -422,7 +422,7 @@ const prefixRoute = <R extends Route.Any, const Prefix extends string>(
   } as unknown as PrefixedRoute<R, Prefix>;
 };
 
-type WithMiddleware<R extends Route.Any, M extends AnyMiddleware> = R extends Route<
+export type WithMiddleware<R extends Route.Any, M extends AnyMiddleware> = R extends Route<
   infer Id,
   infer Path,
   infer ParamsSchema,
@@ -526,7 +526,7 @@ export const merge = <const Groups extends ReadonlyArray<AnyRouteGroup>>(
 /** The members `Route.layout` wraps: `self`'s own type if it's a single
  * `Route`, otherwise the group's member union — in both cases WITHOUT its
  * `Route.Descendants` yet, `layout`'s own return type widens that in. */
-type MembersOf<Self extends AnyRouteGroup | Route.Any> = Self extends Route.Any
+export type MembersOf<Self extends AnyRouteGroup | Route.Any> = Self extends Route.Any
   ? Self
   : RoutesOf<Self>;
 
