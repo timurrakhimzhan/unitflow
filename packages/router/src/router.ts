@@ -271,6 +271,19 @@ export interface Route<
   readonly path: Path;
   readonly options: RouteOptions<Path, ParamsSchema, Search>;
   readonly middlewares: ReadonlyArray<AnyMiddleware>;
+  /** `true` only for `Route.layout`'s implicit parent: contributes no path
+   * segment, can never be a leaf/exact match — distinct from `path: "/"`
+   * (which is a real, navigable root) even though both normalize to `"/"`. */
+  readonly pathless?: boolean;
+  /** The id of the route this one was explicitly attached under — via
+   * `Route.addChild` on the parent, or implicitly via `Route.layout`'s
+   * pathless grouping parent. `undefined` for a route with no declared
+   * parent: it matches only itself, never becomes an accidental ancestor of
+   * an unrelated route that happens to share a literal path prefix. */
+  readonly parentId?: string;
+  /** Children declared on this route via `Route.addChild`, not yet
+   * expanded into the flat list `Route.group(...)` compiles from. */
+  readonly children: ReadonlyArray<Route.Any>;
   readonly "~types": {
     readonly id: Id;
     readonly path: Path;
@@ -295,6 +308,24 @@ export namespace Route {
   export type Provided<R extends Any> = R["~types"]["provided"];
   export type Error<R extends Any> = R["~types"]["error"];
   export type Services<R extends Any> = R["~types"]["services"];
+  /** The FULLY FLATTENED set of routes `Route.addChild` attached under `R`,
+   * at any depth — carried as a phantom `"~children"` marker INTERSECTED
+   * onto `R`'s type (not one of `Route<>`'s own type parameters, kept out
+   * of the core interface so `Route.Any` stays the simple type every other
+   * conditional type here already builds on). `WithChild` bakes a child's
+   * OWN already-flattened closure in at EACH `addChild` call (bottom-up),
+   * so reading this is a single non-recursive extraction, not a recursive
+   * walk — a recursive `Descendants<R>` was tried and blew up `tsc`
+   * (TS2589) once anything opaque (`Route.Any` itself, or a fully generic
+   * unresolved type parameter behind `AnyRouteGroup`) reached it. Plain
+   * routes never declare this property, so the check below fails structural
+   * assignability and falls through to `readonly []`. */
+  export type Children<R> = R extends { readonly "~children": infer C extends ReadonlyArray<Any> }
+    ? C
+    : readonly [];
+  /** Alias of {@link Children}: already the full flattened descendant set by
+   * construction (see `WithChild`), not computed by recursing here. */
+  export type Descendants<R> = Children<R>[number];
 }
 
 export const isRoute = (value: unknown): value is Route.Any =>
@@ -315,8 +346,57 @@ export const route = <
   path: normalizePath(options.path) as Path,
   options: { ...options, path: normalizePath(options.path) as Path },
   middlewares: [],
+  children: [],
   "~types": undefined as unknown as Route<Id, Path, ParamsSchema, Search>["~types"],
 });
+
+/** `PrefixedRoute` applied to every member of a tuple, preserving its
+ * length/order (a homomorphic mapped tuple type) — used to re-root a whole
+ * already-flattened subtree (a child's own previously-attached descendants)
+ * under a NEW ancestor's path, mirroring what `flattenRoute` does to the
+ * VALUE at runtime by threading the accumulated prefix down. */
+type PrefixedTuple<T extends ReadonlyArray<Route.Any>, Prefix extends string> = {
+  readonly [K in keyof T]: PrefixedRoute<T[K], Prefix>;
+};
+
+// `Omit<R, "~children">` first: R may already carry a marker from an
+// earlier `.pipe(Route.addChild(...))` in the same chain — intersecting a
+// SECOND "~children" property on top of that (rather than replacing it)
+// would type it as `OldTuple & NewTuple`, not the union `Descendants` needs.
+// `Child` (and its own already-attached descendants) get `Route.Path<R>`
+// joined in, matching the runtime path-joining `flattenRoute` performs.
+type WithChild<R extends Route.Any, Child extends Route.Any> = Omit<R, "~children"> & {
+  readonly "~children": readonly [
+    ...Route.Children<R>,
+    PrefixedRoute<Child, Route.Path<R>>,
+    ...PrefixedTuple<Route.Children<Child>, Route.Path<R>>,
+  ];
+};
+
+/** Declares `child` as nested under `self`: `child`'s path is rewritten to
+ * join under `self`'s own path (reuses the same `joinPaths` composition
+ * `.prefix()` already uses), and `child.parentId` is set to `self.id`.
+ * Opt-in only — a route with no `addChild` calls has no children, so two
+ * routes whose paths happen to share a literal prefix never nest unless
+ * this was called explicitly. Chainable: `.pipe(Route.addChild(A),
+ * Route.addChild(B))`. */
+export const addChild =
+  <Child extends Route.Any>(child: Child) =>
+  <Self extends Route.Any>(self: Self): WithChild<Self, Child> => {
+    // Path-joining happens ONCE, bottom-up, in `flattenRoute` — not here.
+    // `child` may itself already have grandchildren attached (an earlier
+    // `.addChild` on `child`); if this function eagerly joined `self.path`
+    // into just `child`'s own path, those grandchildren's paths (already
+    // baked relative to `child`'s ORIGINAL, pre-attachment path) would never
+    // learn about `self`'s prefix. Deferring to `flattenRoute`, which
+    // threads the accumulated prefix down through the whole tree, keeps
+    // every depth correct regardless of attachment order.
+    const linkedChild: Route.Any = { ...child, parentId: self.id };
+    return {
+      ...self,
+      children: [...self.children, linkedChild],
+    } as unknown as WithChild<Self, Child>;
+  };
 
 type PrefixedRoute<R extends Route.Any, Prefix extends string> = R extends Route<
   infer Id,
@@ -397,30 +477,106 @@ const RouteGroupProto = {
   },
 };
 
+/** Flattens a route declared with `.addChild(...)` into itself plus every
+ * declared descendant (recursively — a child may have its own children),
+ * each already carrying its `parentId`. A route with no children flattens
+ * to just itself. */
+const flattenRoute = (current: Route.Any, prefix = ""): ReadonlyArray<Route.Any> => {
+  // Pathless (`Route.layout`) parents contribute no URL segment of their
+  // own — skip through them unchanged, threading the SAME prefix to their
+  // members, instead of joining against their placeholder `path: ""`.
+  if (current.pathless === true) {
+    return [
+      { ...current, children: [] },
+      ...current.children.flatMap((child) => flattenRoute(child, prefix)),
+    ];
+  }
+  const path = joinPaths(prefix, current.path);
+  return [
+    { ...current, path, options: { ...current.options, path }, children: [] },
+    ...current.children.flatMap((child) => flattenRoute(child, path)),
+  ];
+};
+
+/** Builds a `RouteGroup` from top-level route arguments, widening each
+ * argument's type into itself PLUS every route `Route.addChild` attached
+ * under it (at any depth) — matching what `flattenRoute` does to the VALUE
+ * at runtime, so a route table built from one `.addChild`-composed parent
+ * exposes every descendant's id/path to `RoutePath`/`RouteIds` and friends,
+ * not just the parent passed in directly. */
 export const group = <const Routes extends ReadonlyArray<Route.Any>>(
   ...routes: Routes
-): RouteGroup<Routes[number]> =>
+): RouteGroup<Routes[number] | Route.Descendants<Routes[number]>> =>
   Object.assign(Object.create(PipeableProto), RouteGroupProto, {
     [RouteGroupTypeId]: RouteGroupTypeId,
-    routes,
+    routes: routes.flatMap((current) => flattenRoute(current)),
   });
 
 export const makeGroup = group;
 
 export const add = <const Routes extends ReadonlyArray<Route.Any>>(
   ...routes: Routes
-): RouteGroup<Routes[number]> => group(...routes);
+): RouteGroup<Routes[number] | Route.Descendants<Routes[number]>> => group(...routes);
 
 export const merge = <const Groups extends ReadonlyArray<AnyRouteGroup>>(
   ...groups: Groups
 ): RouteGroup<RoutesOf<Groups[number]>> =>
   group(...groups.flatMap((current) => current.routes)) as RouteGroup<RoutesOf<Groups[number]>>;
 
-export const prefix = <const Prefix extends string, Group extends AnyRouteGroup>(
-  routeGroup: Group,
-  path: Prefix,
-): RouteGroup<PrefixedRoute<RoutesOf<Group>, Prefix>> =>
-  routeGroup.prefix(path) as unknown as RouteGroup<PrefixedRoute<RoutesOf<Group>, Prefix>>;
+/** The members `Route.layout` wraps: `self`'s own type if it's a single
+ * `Route`, otherwise the group's member union — in both cases WITHOUT its
+ * `Route.Descendants` yet, `layout`'s own return type widens that in. */
+type MembersOf<Self extends AnyRouteGroup | Route.Any> = Self extends Route.Any
+  ? Self
+  : RoutesOf<Self>;
+
+/** Wraps `self` (a route, or a group of routes) under an implicit pathless
+ * parent with the given id — a shared rendering/guard-scope wrapper for
+ * *independent* siblings that aren't the same resource (unlike
+ * `Route.addChild`, which is for one route that genuinely owns a child's
+ * content). The parent contributes no path segment of its own. */
+export const layout =
+  <const Id extends string>(id: Id) =>
+  <Self extends AnyRouteGroup | Route.Any>(
+    self: Self,
+  ): RouteGroup<
+    Route<Id, "", undefined, undefined> | MembersOf<Self> | Route.Descendants<MembersOf<Self>>
+  > => {
+    const members = isRoute(self) ? [self as Route.Any] : (self as AnyRouteGroup).routes;
+    const parent: Route.Any = {
+      ...PipeableProto,
+      [RouteTypeId]: RouteTypeId,
+      id,
+      path: "",
+      options: { path: "" },
+      middlewares: [],
+      children: [],
+      pathless: true,
+      // eslint-disable-next-line revizo/no-type-assertion
+      "~types": undefined as never,
+    };
+    const linkedMembers = members.map((member) => ({ ...member, parentId: id }));
+    // eslint-disable-next-line revizo/no-type-assertion
+    return group(parent, ...linkedMembers) as never;
+  };
+
+/** Attaches a middleware TAG to `self` (a route, or every route currently in
+ * a group). With explicit parent-child hierarchy, attaching to a shared
+ * parent (`Route.layout`'s implicit parent, or any `Route.addChild` owner)
+ * is usually enough — `resolveMatches` walks the ancestor chain and runs an
+ * ancestor's middlewares for every descendant navigation, so a group-wide
+ * attach is only needed for independent routes with no shared parent. */
+export const middleware =
+  <M extends AnyMiddleware>(mw: M) =>
+  <Self extends AnyRouteGroup | Route.Any>(self: Self): Self extends AnyRouteGroup ? RouteGroup<WithMiddleware<RoutesOf<Self>, M>> : WithMiddleware<Self & Route.Any, M> =>
+    (isRoute(self)
+      ? { ...self, middlewares: [...(self as Route.Any).middlewares, mw] }
+      : (self as AnyRouteGroup).middleware(mw)) as never;
+
+export const prefix =
+  <const Prefix extends string>(path: Prefix) =>
+  <Group extends AnyRouteGroup>(routeGroup: Group): RouteGroup<PrefixedRoute<RoutesOf<Group>, Prefix>> =>
+    routeGroup.prefix(path) as unknown as RouteGroup<PrefixedRoute<RoutesOf<Group>, Prefix>>;
 
 export const routes = <Group extends AnyRouteGroup>(routeGroup: Group): ReadonlyArray<RoutesOf<Group>> =>
   routeGroup.routes as unknown as ReadonlyArray<RoutesOf<Group>>;
@@ -778,12 +934,29 @@ type SearchParamOptions<Search> = IsAny<Search> extends true
       ? { readonly search?: Search | true | ((current: RawSearch) => Search) }
       : { readonly search: Search | true | ((current: RawSearch) => Search) };
 
-export type ToOptions<TRouter extends AnyRouter | AnyRouterController, To extends RoutePath<TRouter>> = {
-  readonly to: To;
+/** A raw href, not one of the router's registered route templates — no
+ * `params`/`search` to type-check against a schema that doesn't apply. The
+ * companion to the typed member below: together they let `navigate`/`Link`
+ * accept either a known route (typed, autocompleted) or an arbitrary string
+ * (e.g. a redirect target stashed as `?redirect=<href>`), matching the same
+ * "known union member or plain string" shape TanStack Router's own `to`
+ * typing uses. */
+export interface RawToOptions {
+  readonly to: string & {};
   readonly hash?: string | true;
   readonly state?: unknown;
-} & PathParamOptions<PathParamsFor<TRouter, To>> &
-  SearchParamOptions<SearchInputFor<TRouter, To>>;
+  readonly params?: never;
+  readonly search?: never;
+}
+
+export type ToOptions<TRouter extends AnyRouter | AnyRouterController, To extends RoutePath<TRouter>> =
+  | ({
+      readonly to: To;
+      readonly hash?: string | true;
+      readonly state?: unknown;
+    } & PathParamOptions<PathParamsFor<TRouter, To>> &
+      SearchParamOptions<SearchInputFor<TRouter, To>>)
+  | RawToOptions;
 
 export type NavigateOptions<
   TRouter extends AnyRouter | AnyRouterController,
@@ -820,6 +993,10 @@ export const isNotFoundError = (value: unknown): value is NotFoundError =>
 interface CompiledRoute<R extends Route.Any> {
   readonly route: R;
   readonly exact: RegExp;
+  /** Used only to isolate an ALREADY-KNOWN ancestor's own params from a
+   * longer pathname (the leaf's) — never to discover ancestors: branch
+   * membership comes from `route.parentId`, not from filtering the whole
+   * route list by this pattern. */
   readonly prefix: RegExp;
   readonly paramNames: ReadonlyArray<{ readonly name: string; readonly optional: boolean }>;
   readonly score: number;
@@ -851,14 +1028,31 @@ export interface RouterTargets<Id extends string, Group extends AnyRouteGroup> {
   >;
 }
 
+/** What `Router.make(...)` returns: one value instead of a `NavigationModel`/
+ * `RouteModel` pair the app had to name and compose separately. `model`
+ * (the engine — navigation, current location, `buildHref`/`buildLocation`)
+ * and `routeModel` (the keyed per-route unit) are the same two `Model.get`
+ * targets as before, just nested — `model`/`routeModel` are plain fields,
+ * not the identifiers of their own types (`RouterModel`/`RouteModel`),
+ * exactly like the existing `routes` value / `RouteModel<...>` type pairing
+ * already has. `layer` is `routeModel.layer` merged with `model.layer` —
+ * `routeModel`'s own `make` already leases `model`, so this is the same
+ * composition apps previously wrote by hand at the call site. */
+export interface AppRouter<Id extends string, Group extends AnyRouteGroup> {
+  readonly model: RouterModel<Id, Group> & RouterTargets<Id, Group>;
+  readonly routeModel: RouteModel<Id, Group>;
+  readonly layer: Layer.Layer<
+    RouterModel<Id, Group> | RouteModel<Id, Group>,
+    never,
+    Exclude<RouterServicesForGroup<Group> | History | Registry, InstanceScope | Scope.Scope>
+  >;
+}
+
 export const make = <const Id extends string, const Group extends AnyRouteGroup>(
   id: Id,
   routeGroup: Group,
   options: RouterOptions = {},
-): {
-  readonly NavigationModel: RouterModel<Id, Group> & RouterTargets<Id, Group>;
-  readonly RouteModel: RouteModel<Id, Group>;
-} => {
+): AppRouter<Id, Group> => {
   // The `routes` model's per-key claim — `Model.get(router.routes, K)`
   // returns THE route with id K — is only sound if ids are unique: the unit
   // resolves its route by `find(route.id === key)`. Enforce the
@@ -925,7 +1119,12 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
       Effect.flatMap(getController(router), (api) => api.buildHrefEffect(options as never)),
   } as never) as RouterModel<Id, Group> & RouterTargets<Id, Group>;
 
-  return { NavigationModel: model, RouteModel: routes };
+  // `routes.layer`'s own `make` already leases `router` (`Model.get(router)`
+  // above) — merging `model.layer` in satisfies that requirement, the same
+  // composition an app previously wrote by hand at the call site.
+  const layer = routes.layer.pipe(Layer.provideMerge(model.layer)) as AppRouter<Id, Group>["layer"];
+
+  return { model, routeModel: routes, layer };
 };
 
 /** INTERNAL (used by RouterView): the pages model — one singleton owning
@@ -967,6 +1166,7 @@ const makeShape = <Group extends AnyRouteGroup>(
     const stringifySearch = options.stringifySearch ?? defaultStringifySearch;
     const history = (yield* History).make({ parseSearch });
     const compiled = routeGroup.routes.map(compileRoute).sort((a, b) => b.score - a.score);
+    const compiledById = new Map(compiled.map((current) => [current.route.id, current]));
     const blockers = new Set<Blocker>();
     let disposed = false;
     let ignoreNextHistory = false;
@@ -1066,8 +1266,31 @@ const makeShape = <Group extends AnyRouteGroup>(
         const leaf = exactMatches[0];
         if (leaf === undefined) return yield* Effect.fail(new NotFoundError({}));
 
-        const branch = compiled
-          .map((compiledRoute) => ({ compiledRoute, match: compiledRoute.prefix.exec(pathname) }))
+        // Ancestors come from the explicitly declared `parentId` chain, not
+        // from filtering the whole route list by path — a route with no
+        // declared parent (including one at "/") is never an accidental
+        // ancestor of anything else, only of itself.
+        const chain: Array<CompiledRoute<Route.Any>> = [];
+        let current: CompiledRoute<Route.Any> | undefined = leaf.compiledRoute;
+        while (current !== undefined) {
+          chain.push(current);
+          const parentId: string | undefined = current.route.parentId;
+          current = parentId === undefined ? undefined : compiledById.get(parentId);
+        }
+        chain.reverse(); // root-first, guards run parent-first
+
+        // A pathless `Route.layout` ancestor has no slice of the pathname of
+        // its own — no params/search to decode, just middlewares to run and
+        // an id for the render tree to key on. A real ancestor's prefix
+        // should always match (its path is, by construction, a literal
+        // prefix of the leaf's own compiled path) — the null-filter is
+        // defensive, not expected to trigger.
+        const branch = chain
+          .map((compiledRoute) =>
+            compiledRoute.route.pathless === true
+              ? { compiledRoute, match: [""] as unknown as RegExpExecArray }
+              : { compiledRoute, match: compiledRoute.prefix.exec(pathname) },
+          )
           .filter(
             (
               item,
@@ -1075,11 +1298,6 @@ const makeShape = <Group extends AnyRouteGroup>(
               readonly compiledRoute: CompiledRoute<Route.Any>;
               readonly match: RegExpExecArray;
             } => item.match !== null,
-          )
-          .sort(
-            (a, b) =>
-              a.compiledRoute.length - b.compiledRoute.length ||
-              a.compiledRoute.score - b.compiledRoute.score,
           );
 
         const matches: Array<RouteMatch<Route.Any>> = [];
@@ -1188,8 +1406,16 @@ const makeShape = <Group extends AnyRouteGroup>(
       toOptions: ToOptions<RouterController<Group>, To>,
     ): Effect.Effect<ParsedLocation, unknown, RouterServicesForGroup<Group>> => Effect.gen(function* () {
       const foundRoute = routeGroup.routes.find((current) => current.path === toOptions.to);
+      const hash = toOptions.hash === true ? currentState.location.hash : toOptions.hash ?? "";
       if (foundRoute === undefined) {
-        return yield* Effect.fail(new Error(`Unitflow router cannot build unknown route "${String(toOptions.to)}".`));
+        // Not one of the registered route templates — a raw href
+        // (`RawToOptions`): build the location straight from the string, no
+        // param/search schema to encode against.
+        return makeLocation(
+          `${addBasepath(toOptions.to, options.basepath)}${hash === "" ? "" : `#${hash}`}`,
+          parseSearch,
+          toOptions.state,
+        );
       }
       const targetRoute = foundRoute as RoutesOf<Group>;
       const routeParams = yield* encodeParams(targetRoute, toOptions.params);
@@ -1199,7 +1425,6 @@ const makeShape = <Group extends AnyRouteGroup>(
       });
       const rawSearch = yield* encodeSearch(targetRoute, toOptions.search);
       const searchString = stringifySearch(rawSearch);
-      const hash = toOptions.hash === true ? currentState.location.hash : toOptions.hash ?? "";
       return makeLocation(
         `${pathname}${searchString}${hash === "" ? "" : `#${hash}`}`,
         parseSearch,
@@ -1708,17 +1933,17 @@ const stripBasepath = (path: string, basepath: string | undefined): string => {
 
 const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** A regex that never matches anything — for `Route.layout`'s implicit
+ * parent, which has no real path and can never be a leaf/exact match. */
+const NEVER_MATCH = /(?!)/;
+
 const compileRoute = <R extends Route.Any>(current: R): CompiledRoute<R> => {
+  if (current.pathless === true) {
+    return { route: current, exact: NEVER_MATCH, prefix: NEVER_MATCH, paramNames: [], score: 0, length: 0 };
+  }
   const path = normalizePath(current.path);
   if (path === "/") {
-    return {
-      route: current,
-      exact: /^\/?$/,
-      prefix: /^\//,
-      paramNames: [],
-      score: 0,
-      length: 0,
-    };
+    return { route: current, exact: /^\/?$/, prefix: /^\//, paramNames: [], score: 0, length: 0 };
   }
   const segments = path.slice(1).split("/");
   const paramNames: Array<{ name: string; optional: boolean }> = [];

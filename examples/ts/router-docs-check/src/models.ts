@@ -5,10 +5,10 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { Event, Model, Query, Registry, Store } from "@unitflow/core";
 import { Router } from "@unitflow/router";
-import { NavigationModel, RouteModel } from "./routes";
+import { AppRouter } from "./routes";
 
 const program = Effect.gen(function* () {
-  const unit = yield* Model.get(RouteModel, "user");
+  const unit = yield* Model.get(AppRouter.routeModel, "user");
 
   const opened = yield* Store.get(unit.outputs.opened); // boolean
   const params = yield* Store.get(unit.outputs.params); // Option<{ id: number }>
@@ -33,7 +33,7 @@ declare const fetchUser: (id: number) => Effect.Effect<User, "not found">;
 export class UserPageModel extends Model.Service<UserPageModel>()("docs/UserPage")({
   make: () =>
     Effect.gen(function* () {
-      const unit = yield* Model.get(RouteModel, "user");
+      const unit = yield* Model.get(AppRouter.routeModel, "user");
       const user = yield* Query.make({
         stores: { params: unit.outputs.params },
         handler: ({ params }) =>
@@ -52,7 +52,7 @@ export class UserPageModel extends Model.Service<UserPageModel>()("docs/UserPage
 
 // #region navigate
 const goToUser = Effect.gen(function* () {
-  const nav = yield* Model.get(NavigationModel);
+  const nav = yield* Model.get(AppRouter.model);
 
   yield* Event.emit(nav.inputs.navigate, {
     to: "/users/:id",
@@ -68,7 +68,7 @@ const goToUser = Effect.gen(function* () {
 
 // #region href
 const shareLink = Effect.gen(function* () {
-  const href = yield* NavigationModel.buildHref({
+  const href = yield* AppRouter.model.buildHref({
     to: "/users",
     search: { page: 2, sort: "desc", filter: { role: "admin" } },
   });
@@ -80,8 +80,7 @@ const shareLink = Effect.gen(function* () {
 import * as Layer from "effect/Layer";
 
 // Tests drive the router with an in-memory history:
-const testLayer = RouteModel.layer.pipe(
-  Layer.provideMerge(NavigationModel.layer),
+const testLayer = AppRouter.layer.pipe(
   Layer.provideMerge(Router.memoryHistoryLayer({ initialEntries: ["/users/7"] })),
   Layer.provideMerge(Registry.layer),
 );

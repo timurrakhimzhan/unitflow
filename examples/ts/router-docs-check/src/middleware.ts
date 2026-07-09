@@ -5,7 +5,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { Model, Store } from "@unitflow/core";
-import { Router } from "@unitflow/router";
+import { Route, Router } from "@unitflow/router";
 
 interface SessionShape {
   readonly currentUser: Effect.Effect<Option.Option<string>>;
@@ -37,22 +37,22 @@ export const AuthGuardLive = AuthGuard.layer((context) =>
 // #endregion implement
 
 // #region attach
-const DashboardRoute = Router.route("dashboard", { path: "/dashboard" });
-const MembersRoute = Router.route("members", { path: "/members" });
+const DashboardRoute = Route.make("dashboard", { path: "/dashboard" });
+const MembersRoute = Route.make("members", { path: "/members" });
 
-const adminRoutes = Router.group(DashboardRoute, MembersRoute)
+const adminRoutes = Route.group(DashboardRoute, MembersRoute)
   .middleware(AuthGuard)
   .prefix("/admin");
 
-export const { NavigationModel: AdminNav, RouteModel: AdminRouteModel } = Router.make(
+export const AdminRouter = Router.make(
   "docs/admin-router",
-  Router.group(Router.route("home", { path: "/" })).merge(adminRoutes),
+  Route.group(Route.make("home", { path: "/" })).merge(adminRoutes),
 );
 // #endregion attach
 
 // #region provided
 const readProvided = Effect.gen(function* () {
-  const unit = yield* Model.get(AdminRouteModel, "dashboard");
+  const unit = yield* Model.get(AdminRouter.routeModel, "dashboard");
   const provided = yield* Store.get(unit.outputs.provided);
   // Option.some({ user }) whenever the route is open: the guard passing is
   // what LET it open

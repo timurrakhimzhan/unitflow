@@ -1,5 +1,5 @@
 export * as Router from "./public.js";
-export * as RouterGroup from "./router-group.js";
+export * as Route from "./route.js";
 // Direct type re-exports: through a bare `export * as` alone, the
 // declaration emitter cannot name the symbols flowing through in a
 // composite/declaration consumer build (TS2742/TS2883) — it falls back to

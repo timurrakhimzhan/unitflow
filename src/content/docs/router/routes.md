@@ -19,10 +19,10 @@ router (a duplicate is a construction-time error).
 
 ```ts
 import * as Schema from "effect/Schema";
-import { Router } from "@unitflow/router";
+import { Route } from "@unitflow/router";
 
-export const HomeRoute = Router.route("home", { path: "/" });
-export const LoginRoute = Router.route("login", { path: "/login" });
+export const HomeRoute = Route.make("home", { path: "/" });
+export const LoginRoute = Route.make("login", { path: "/login" });
 ```
 
 ## Path Params
@@ -34,13 +34,13 @@ strings decode into typed values — and encode back when building links.
 ```ts
 const userParams = Schema.Struct({ id: Schema.NumberFromString });
 
-export const UserRoute = Router.route("user", {
+export const UserRoute = Route.make("user", {
   path: "/users/:id",
   params: userParams,
 });
 // Without a schema, params stay raw strings typed from the path:
-export const FileRoute = Router.route("file", { path: "/files/*path" });
-export const DraftRoute = Router.route("draft", { path: "/drafts/:id?" });
+export const FileRoute = Route.make("file", { path: "/files/*path" });
+export const DraftRoute = Route.make("draft", { path: "/drafts/:id?" });
 ```
 
 `/users/42` matches `UserRoute` with `params` decoded to `{ id: 42 }` — a
@@ -65,7 +65,7 @@ const usersSearch = Schema.Struct({
   q: Schema.optionalKey(Schema.String),
 });
 
-export const UsersRoute = Router.route("users", {
+export const UsersRoute = Route.make("users", {
   path: "/users",
   search: usersSearch,
 });
@@ -80,32 +80,74 @@ Groups collect routes and compose: `add` appends, `merge` combines groups,
 `prefix` re-roots every path. The same shape as `RpcGroup` in Effect.
 
 ```ts
-const publicRoutes = Router.group(HomeRoute, LoginRoute);
-const userRoutes = Router.group(UsersRoute, UserRoute);
+const publicRoutes = Route.group(HomeRoute, LoginRoute);
+const userRoutes = Route.group(UsersRoute, UserRoute);
 
 // merge and prefix compose groups; ids must stay unique
 const allRoutes = publicRoutes
   .merge(userRoutes)
-  .merge(Router.group(FileRoute, DraftRoute).prefix("/storage"));
+  .merge(Route.group(FileRoute, DraftRoute).prefix("/storage"));
 ```
+
+## Nesting: `Route.addChild` and `Route.layout`
+
+Nesting is **declared**, never inferred from a shared path prefix. A route
+at `/` does not become an ancestor of every other route just because every
+path starts with `/` — a route has children only if `Route.addChild` said
+so. This matters for two things: which view wraps which
+([React](/router/react/)) and which routes a guard attached to a parent
+actually covers ([Middleware](/router/middleware/)).
+
+`child`'s `path` is relative to the parent's own path — joined on attach:
+
+```ts
+const EditRoute = Route.make("edit", { path: "/edit" });
+
+// ProjectRoute owns EditRoute: /projects/:projectId/edit is its child page,
+// not an unrelated route that happens to share a path prefix.
+export const ProjectRoute = Route.make("project", {
+  path: "/projects/:projectId",
+  params: Schema.Struct({ projectId: Schema.NumberFromString }),
+}).pipe(Route.addChild(EditRoute));
+```
+
+`Route.layout(id)` covers the other shape: wrapping *independent* siblings
+— routes that aren't each other's content, just share a rendering/guard
+scope — under a shared, pathless parent that contributes no URL segment of
+its own:
+
+```ts
+// Route.layout wraps otherwise-unrelated siblings under a shared, pathless
+// parent — for a shell around resources that aren't nested in each other.
+const SettingsRoute = Route.make("settings", { path: "/settings" });
+const ReportsRoute = Route.make("reports", { path: "/reports" });
+const dashboardArea = Route.group(SettingsRoute, ReportsRoute).pipe(Route.layout("dashboard"));
+```
+
+Use `addChild` when one route genuinely owns a child's content (a project
+page and its edit sub-view); use `layout` when several routes merely share a
+wrapper (a dashboard shell around otherwise-unrelated resources).
 
 ## Creating the Router
 
-`Router.make` births **two models** at once; the application only names
-them through destructuring. Registering the router afterwards makes every
-erased target — `Link` props, redirect options — typecheck against this
-exact route table.
+`Router.make` births one `AppRouter`: `model` (the engine), `routeModel`
+(the keyed per-route model), and `layer` (the two, already composed).
+Registering the router afterwards makes every erased target — `Link` props,
+redirect options — typecheck against this exact route table.
 
 ```ts
-export const { NavigationModel, RouteModel } = Router.make("docs/router", allRoutes);
+export const AppRouter = Router.make(
+  "docs/router",
+  allRoutes.merge(Route.group(ProjectRoute)).merge(dashboardArea),
+);
 
 // Registering the router types Link/redirect targets application-wide.
 declare module "@unitflow/router" {
   interface Register {
-    readonly router: typeof NavigationModel;
+    readonly router: typeof AppRouter.model;
   }
 }
 ```
 
-What the two models are — and how pages consume them — is the subject of
-[the next section](/router/models/).
+What `model` and `routeModel` are — and how pages consume them — is the
+subject of [the next section](/router/models/).

@@ -1,18 +1,22 @@
 ---
-title: "Router: The Two Models"
-description: NavigationModel and RouteModel — navigating through events, reading route state through ports, and gating page data with Query.
+title: "Router: The AppRouter Models"
+description: AppRouter.model and AppRouter.routeModel — navigating through events, reading route state through ports, and gating page data with Query.
 ---
 
-`Router.make` returns two ordinary Unitflow models. There is no controller
-object and no hooks: actions are input events, state is output stores —
-exactly like every other model in the system.
+`Router.make` returns one `AppRouter`, wrapping two ordinary Unitflow
+models plus their composed layer. There is no controller object and no
+hooks: actions are input events, state is output stores — exactly like
+every other model in the system.
 
-- **`NavigationModel`** — the engine. `inputs.navigate` drives transitions,
+- **`AppRouter.model`** — the engine. `inputs.navigate` drives transitions,
   `outputs.state`/`location` expose where the app is. `buildHref` and
   `buildLocation` live on the model value.
-- **`RouteModel`** — keyed by route id. `Model.get(RouteModel, "user")`
-  returns that route's unit: occupancy and decoded params/search, narrowed
-  to **that route's** schemas.
+- **`AppRouter.routeModel`** — keyed by route id.
+  `Model.get(AppRouter.routeModel, "user")` returns that route's unit:
+  occupancy and decoded params/search, narrowed to **that route's** schemas.
+- **`AppRouter.layer`** — `routeModel.layer` merged with `model.layer` (the
+  composition every app previously wrote by hand). Still requires a history
+  layer and any page models' own layers.
 
 ## Route Units
 
@@ -21,10 +25,10 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { Event, Model, Query, Registry, Store } from "@unitflow/core";
 import { Router } from "@unitflow/router";
-import { NavigationModel, RouteModel } from "./routes";
+import { AppRouter } from "./routes";
 
 const program = Effect.gen(function* () {
-  const unit = yield* Model.get(RouteModel, "user");
+  const unit = yield* Model.get(AppRouter.routeModel, "user");
 
   const opened = yield* Store.get(unit.outputs.opened); // boolean
   const params = yield* Store.get(unit.outputs.params); // Option<{ id: number }>
@@ -60,7 +64,7 @@ declare const fetchUser: (id: number) => Effect.Effect<User, "not found">;
 export class UserPageModel extends Model.Service<UserPageModel>()("docs/UserPage")({
   make: () =>
     Effect.gen(function* () {
-      const unit = yield* Model.get(RouteModel, "user");
+      const unit = yield* Model.get(AppRouter.routeModel, "user");
       const user = yield* Query.make({
         stores: { params: unit.outputs.params },
         handler: ({ params }) =>
@@ -88,7 +92,7 @@ query.
 
 ```ts
 const goToUser = Effect.gen(function* () {
-  const nav = yield* Model.get(NavigationModel);
+  const nav = yield* Model.get(AppRouter.model);
 
   yield* Event.emit(nav.inputs.navigate, {
     to: "/users/:id",
@@ -104,12 +108,22 @@ const goToUser = Effect.gen(function* () {
 
 `to` is constrained to the router's declared paths; `params` and `search`
 follow the target route's schemas. A typo in any of them does not compile.
+`to` also accepts a raw string (e.g. a `?redirect=` value read back off the
+URL, not one of the router's own declared paths) — useful for
+redirect-after-login, where the target was never a compile-time literal:
+
+```ts
+yield* Event.emit(nav.inputs.navigate, { to: redirectTarget }); // to: string
+```
+
+A raw `to` skips `params`/`search` entirely (they don't type-check against
+an unknown target) — build the full href yourself first if you need them.
 
 ## Building Hrefs
 
 ```ts
 const shareLink = Effect.gen(function* () {
-  const href = yield* NavigationModel.buildHref({
+  const href = yield* AppRouter.model.buildHref({
     to: "/users",
     search: { page: 2, sort: "desc", filter: { role: "admin" } },
   });
@@ -128,8 +142,7 @@ tests. Forgetting one is a compile error, not a silent default.
 import * as Layer from "effect/Layer";
 
 // Tests drive the router with an in-memory history:
-const testLayer = RouteModel.layer.pipe(
-  Layer.provideMerge(NavigationModel.layer),
+const testLayer = AppRouter.layer.pipe(
   Layer.provideMerge(Router.memoryHistoryLayer({ initialEntries: ["/users/7"] })),
   Layer.provideMerge(Registry.layer),
 );

@@ -4,7 +4,7 @@ import type * as React from "react";
 import { View } from "@unitflow/react";
 import { Link, RouterView } from "@unitflow/router/react";
 import type { User } from "./api";
-import { NavigationModel, UserPageModel, UsersPageModel } from "./routes";
+import { AppRouter, UserPageModel, UsersPageModel } from "./routes";
 
 const Pending = () => <div className="state">Loading…</div>;
 
@@ -91,8 +91,11 @@ const UserPage = View.make(UserPageModel, ({ user, params, search }) => {
 
 /** ONE map stitches routes, models, and views: a plain function is a view
  * (with its route's narrowed `match`), a View.make component IS its own
- * entry — the router leases its model and hands the unit back in. */
-export const AppView = RouterView.make(NavigationModel, {
+ * entry — the router leases its model and hands the unit back in. `user`
+ * nests under `users` — mirroring `UsersRoute.pipe(Route.addChild(UserRoute))`
+ * in routes.ts — so `UserPage`'s rendered output arrives as `UsersPage`'s
+ * `children` only while `/users/:id` is actually matched. */
+export const AppView = RouterView.make(AppRouter.model, {
   routes: {
     home: ({ children }) => (
       <main className="shell">
@@ -103,8 +106,7 @@ export const AppView = RouterView.make(NavigationModel, {
         {children ?? <p className="muted">Pick a page — data loads when its route opens.</p>}
       </main>
     ),
-    users: UsersPage,
-    user: UserPage,
+    users: { view: UsersPage, routes: { user: UserPage } },
   },
   notFound: () => <div className="state">404</div>,
 });

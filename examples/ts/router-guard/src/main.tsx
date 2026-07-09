@@ -5,7 +5,7 @@ import { devtools } from "@unitflow/devtools";
 import { Unitflow, UnitflowRuntime } from "@unitflow/react";
 import { Router } from "@unitflow/router";
 import { App, AppModel, AppView } from "./App";
-import { AuthGuardLive, NavigationModel } from "./routes";
+import { AppRouter, AuthGuardLive } from "./routes";
 import { SessionModel } from "./session";
 import "./styles.css";
 
@@ -13,7 +13,7 @@ import "./styles.css";
 // requires the guard TAG, the guard requires the session.
 const layer = AppModel.layer.pipe(
   Layer.provideMerge(AppView.model.layer),
-  Layer.provideMerge(NavigationModel.layer),
+  Layer.provideMerge(AppRouter.layer),
   Layer.provideMerge(Router.browserHistoryLayer),
   Layer.provideMerge(AuthGuardLive),
   Layer.provideMerge(SessionModel.layer),

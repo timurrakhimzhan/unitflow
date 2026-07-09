@@ -18,7 +18,7 @@ import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Option from "effect/Option";
 import { View } from "@unitflow/react";
 import { Link, RouterView } from "@unitflow/router/react";
-import { NavigationModel, UserRoute } from "./routes";
+import { AppRouter, UserRoute } from "./routes";
 import { UserPageModel } from "./models";
 
 const UserPage = View.make(UserPageModel, ({ user, refresh }) => {
@@ -50,7 +50,7 @@ Two kinds of entries:
   and hands the unit back in. `user: UserPage` is the whole stitching.
 
 ```tsx
-export const AppView = RouterView.make(NavigationModel, {
+export const AppView = RouterView.make(AppRouter.model, {
   routes: {
     // a plain function is a view: it gets the bound router, its route's
     // narrowed match, and the deeper match as children
@@ -76,9 +76,55 @@ export const AppView = RouterView.make(NavigationModel, {
 ```
 
 Map keys are constrained to the router's route ids — a typo does not
-compile. Because `/` prefix-matches everything, `home` acts as the layout:
-deeper matches render into its `children`, and `children` is `null` at the
-cascade leaf so `children ?? fallback` works.
+compile. `home` here has no declared children (no `Route.addChild`), so its
+`children` is always `null` — `/login`, `/admin`, or any other unrelated
+route never renders inside it just because it also starts with `/`. A route
+only receives another's rendered output as `children` when the route table
+says so explicitly — see the next section.
+
+## Nesting the Views Map
+
+A route's view nests the same way its declaration does: a `{ view, routes }`
+node, keyed exactly like the route table's own `Route.addChild`/`Route.layout`
+hierarchy ([Routes](/router/routes/#nesting-routeaddchild-and-routelayout)).
+
+```tsx
+export const AppView = RouterView.make(AppRouter.model, {
+  routes: {
+    home: HomeView, // no children — unchanged shorthand
+    project: { view: ProjectPage, routes: { edit: ProjectEditView } },
+  },
+});
+```
+
+`ProjectPage` receives `ProjectEditView`'s rendered output as `children`
+only while `/projects/:id/edit` is actually matched — `null` otherwise, the
+same `children ?? fallback` shape as before. A node with no `routes` simply
+leaves any deeper match unwrapped, so a leaf entry like `user: UserPage`
+above still works exactly as shown.
+
+### Recipe: a shared page with an edit sub-view
+
+For "one big page, one small edit view over the same resource," give the
+child its own model that leases the parent's (already-loaded) data instead
+of duplicating the fetch or threading routing logic through either model:
+
+```ts
+export class ProjectEditModel extends Model.Service<ProjectEditModel>()("app/ProjectEdit")({
+  make: () =>
+    Effect.gen(function* () {
+      // Shares ProjectPageModel's already-loaded data — no second fetch,
+      // and ProjectEditModel never touches the route directly.
+      const project = yield* Model.get(ProjectPageModel);
+      return { inputs: {}, outputs: {}, ui: { project: project.outputs.project } };
+    }),
+}) {}
+```
+
+The two stay sibling page models — `ProjectPageModel` doesn't know an edit
+view exists, `ProjectEditModel` doesn't know how it got mounted. Nesting is
+purely a routing/rendering concern, declared once in the route table and
+mirrored once in the views map.
 
 `Link` renders a real `<a href>` — middle-click, cmd-click, and copy work —
 and intercepts plain left clicks into `navigate`. Under a `RouterView` it
@@ -97,12 +143,11 @@ import { createRoot } from "react-dom/client";
 import * as Layer from "effect/Layer";
 import { Unitflow, UnitflowRuntime } from "@unitflow/react";
 import { Router } from "@unitflow/router";
-import { RouteModel } from "./routes";
+import { AppRouter } from "./routes";
 
 const layer = AppView.model.layer.pipe(
   Layer.provideMerge(UserPageModel.layer),
-  Layer.provideMerge(RouteModel.layer),
-  Layer.provideMerge(NavigationModel.layer),
+  Layer.provideMerge(AppRouter.layer),
   Layer.provideMerge(Router.browserHistoryLayer),
 );
 const runtime = UnitflowRuntime.make(layer);

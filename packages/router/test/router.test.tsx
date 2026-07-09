@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import * as React from "react";
 import * as Schema from "effect/Schema";
 import { Event, Model, Registry, Query, Store } from "@unitflow/core";
-import { Router, RouterGroup } from "../src/index.js";
+import { Route, Router } from "../src/index.js";
 import { makePages } from "../src/router.js";
 import * as RouterReact from "../src/react.js";
 import { Link, type BoundRouter, type RouteComponent } from "../src/react.js";
@@ -14,20 +14,20 @@ import { Link, type BoundRouter, type RouteComponent } from "../src/react.js";
 const userParams = Schema.Struct({ id: Schema.NumberFromString });
 const pageSearch = Schema.Struct({ page: Schema.NumberFromString });
 
-const HomeRoute = Router.route("home", { path: "/" });
+const HomeRoute = Route.make("home", { path: "/" });
 
-const UserRoute = Router.route("user", {
+const UserRoute = Route.make("user", {
   path: "/users/:id",
   params: userParams,
   search: pageSearch,
 });
 
-const SettingsRoute = Router.route("settings", {
+const SettingsRoute = Route.make("settings", {
   path: "/settings",
 });
 
-const routeGroup = Router.group(HomeRoute, UserRoute).merge(
-  RouterGroup.make(SettingsRoute).prefix("/admin"),
+const routeGroup = Route.group(HomeRoute, UserRoute).merge(
+  Route.group(SettingsRoute).prefix("/admin"),
 );
 
 let nextRouter = 0;
@@ -38,7 +38,7 @@ const makeRouter = () => Router.make(`/test/router/${++nextRouter}`, routeGroup)
 const testEnv = (initial = "/") =>
   Layer.mergeAll(Registry.layer, Router.memoryHistoryLayer({ initialEntries: [initial] }));
 
-const { NavigationModel: PageQueryRouter, RouteModel: PageQueryRoutes } = Router.make(
+const { model: PageQueryRouter, routeModel: PageQueryRoutes } = Router.make(
   "/test/router/page-query",
   routeGroup,
 );
@@ -94,7 +94,7 @@ class UserRouteQueryModel extends Model.Service<UserRouteQueryModel>()(
 
 describe("@unitflow/router", () => {
   it.effect("matches routes and decodes params/search through the navigate event", () => {
-    const { NavigationModel: AppRouter } = makeRouter();
+    const { model: AppRouter } = makeRouter();
     return Effect.gen(function* () {
       const router = yield* Model.get(AppRouter);
 
@@ -119,7 +119,7 @@ describe("@unitflow/router", () => {
   });
 
   it.effect("builds prefixed group links through Effect dependency injection", () => {
-    const { NavigationModel: AppRouter } = makeRouter();
+    const { model: AppRouter } = makeRouter();
     return Effect.gen(function* () {
       const href = yield* AppRouter.buildHref({ to: "/admin/settings" });
       assert.strictEqual(href, "/admin/settings");
@@ -127,7 +127,7 @@ describe("@unitflow/router", () => {
   });
 
   it.effect("exposes navigation as model ports", () => {
-    const { NavigationModel: AppRouter } = makeRouter();
+    const { model: AppRouter } = makeRouter();
     return Effect.gen(function* () {
       const router = yield* Model.get(AppRouter);
 
@@ -264,12 +264,12 @@ describe("@unitflow/router", () => {
       readonly user: string;
     }>() {}
 
-    const AdminRoute = Router.route("admin", { path: "/admin" });
-    const OpenRoute = Router.route("open", { path: "/" });
-    const guardedGroup = Router.group(OpenRoute).merge(
-      Router.group(AdminRoute).middleware(AdminGuard),
+    const AdminRoute = Route.make("admin", { path: "/admin" });
+    const OpenRoute = Route.make("open", { path: "/" });
+    const guardedGroup = Route.group(OpenRoute).merge(
+      Route.group(AdminRoute).middleware(AdminGuard),
     );
-    const { NavigationModel: GuardedRouter, RouteModel: GuardedRoutes } = Router.make(
+    const { model: GuardedRouter, routeModel: GuardedRoutes } = Router.make(
       "/test/router/guarded",
       guardedGroup,
     );
@@ -335,9 +335,9 @@ describe("@unitflow/router", () => {
       () =>
         Router.make(
           "/test/router/duplicate",
-          Router.group(
-            Router.route("same", { path: "/a" }),
-            Router.route("same", { path: "/b" }),
+          Route.group(
+            Route.make("same", { path: "/a" }),
+            Route.make("same", { path: "/b" }),
           ),
         ),
       /duplicate route id "same"/,
@@ -350,9 +350,13 @@ describe("@unitflow/router", () => {
       options: { to: "/users/:id", params: { id: 1 }, search: { page: 1 } },
     });
     assert.strictEqual(ok._tag, "RedirectError");
+    // A raw href (e.g. a `?redirect=` target a guard read off the URL) is
+    // valid too — the same "known route or plain string" union `navigate`
+    // accepts, since a guard redirecting is just `navigate` under another
+    // name. It skips params/search entirely, unlike a known route below.
+    const rawRedirect = new Router.RedirectError({ options: { to: "/missing" } });
+    assert.strictEqual(rawRedirect._tag, "RedirectError");
     if (false) {
-      // @ts-expect-error redirect targets are typed against the registered router
-      new Router.RedirectError({ options: { to: "/missing" } });
       // @ts-expect-error redirect params follow the target route's schema
       new Router.RedirectError({ options: { to: "/users/:id", params: { id: "1" }, search: { page: 1 } } });
     }
@@ -470,18 +474,18 @@ describe("@unitflow/router", () => {
       q: Schema.optionalKey(Schema.String),
     });
 
-    const RepoRoute = Router.route("repo", {
+    const RepoRoute = Route.make("repo", {
       path: "/orgs/:orgId/repos/:repoId",
       params: repoParams,
       search: repoSearch,
     });
-    const HomeRoute2 = Router.route("home", { path: "/" });
+    const HomeRoute2 = Route.make("home", { path: "/" });
 
     const makeComplex = () =>
-      Router.make(`/test/router/complex/${++nextRouter}`, Router.group(HomeRoute2, RepoRoute));
+      Router.make(`/test/router/complex/${++nextRouter}`, Route.group(HomeRoute2, RepoRoute));
 
     it.effect("roundtrips nested-object search params through the URL", () => {
-      const { NavigationModel: Nav, RouteModel: Routes } = makeComplex();
+      const { model: Nav, routeModel: Routes } = makeComplex();
       const testLayer = Routes.layer.pipe(
         Layer.provideMerge(Nav.layer),
         Layer.provideMerge(testEnv()),
@@ -541,7 +545,7 @@ describe("@unitflow/router", () => {
     });
 
     it.effect("decodes a deep link and rejects invalid search", () => {
-      const { NavigationModel: Nav, RouteModel: Routes } = makeComplex();
+      const { model: Nav, routeModel: Routes } = makeComplex();
       const deepLink =
         "/orgs/42/repos/core?page=3&sort=asc&filter=" +
         encodeURIComponent('{"role":"viewer","active":false,"stars":10}') +
@@ -577,7 +581,7 @@ describe("@unitflow/router", () => {
     });
 
     it.effect("invalid deep link lands in error state", () => {
-      const { NavigationModel: Nav, RouteModel: Routes } = makeComplex();
+      const { model: Nav, routeModel: Routes } = makeComplex();
       const badLink = "/orgs/42/repos/core?page=3&sort=sideways&filter=notjson";
       const layer = Routes.layer.pipe(
         Layer.provideMerge(Nav.layer),
@@ -592,7 +596,7 @@ describe("@unitflow/router", () => {
     });
 
     it("types complex params and search", () => {
-      const { NavigationModel: Nav } = makeComplex();
+      const { model: Nav } = makeComplex();
       if (false) {
         // @ts-expect-error sort is a literal union
         void Nav.buildHref({ to: "/orgs/:orgId/repos/:repoId", params: { orgId: 1, repoId: "x" }, search: { page: 1, sort: "sideways", filter: { role: "admin", active: true, stars: 0 } } });
@@ -607,11 +611,92 @@ describe("@unitflow/router", () => {
     });
   });
 
+  describe("explicit hierarchy", () => {
+    it("addChild derives the joined path and records parentId", () => {
+      const EditRoute = Route.make("edit", { path: "/edit" });
+      const ProjectRoute = Route.make("project", { path: "/projects/:id" }).pipe(
+        Route.addChild(EditRoute),
+      );
+      const group = Route.group(ProjectRoute);
+      const edit = group.routes.find((route) => route.id === "edit");
+      assert.isDefined(edit);
+      assert.strictEqual(edit?.path, "/projects/:id/edit");
+      assert.strictEqual(edit?.parentId, "project");
+    });
+
+    it.effect("a route with no declared children never becomes an accidental ancestor", () => {
+      // Regression: `/` used to prefix-match everything, so a route there
+      // dragged every other navigation's matches along with it.
+      const Home = Route.make("home", { path: "/" });
+      const Login = Route.make("login", { path: "/login" });
+      const { model } = Router.make(
+        `/test/router/no-inherit/${++nextRouter}`,
+        Route.group(Home, Login),
+      );
+      return Effect.gen(function* () {
+        const router = yield* Model.get(model);
+        yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/login" }));
+        const state = yield* Store.get(router.outputs.state);
+        assert.strictEqual(state.matches.length, 1);
+        assert.strictEqual(state.matches[0]?.route.id, "login");
+      }).pipe(Effect.provide(model.layer.pipe(Layer.provideMerge(testEnv()))));
+    });
+
+    it.effect("routes sharing a literal path prefix without addChild do not nest", () => {
+      const Users = Route.make("users", { path: "/users" });
+      const UsersNew = Route.make("usersNew", { path: "/users/new" });
+      const { model } = Router.make(
+        `/test/router/no-prefix-nest/${++nextRouter}`,
+        Route.group(Users, UsersNew),
+      );
+      return Effect.gen(function* () {
+        const router = yield* Model.get(model);
+        yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/users/new" }));
+        const state = yield* Store.get(router.outputs.state);
+        assert.strictEqual(state.matches.length, 1);
+        assert.strictEqual(state.matches[0]?.route.id, "usersNew");
+      }).pipe(Effect.provide(model.layer.pipe(Layer.provideMerge(testEnv()))));
+    });
+
+    it.effect("navigate accepts a raw href string and still runs guards", () => {
+      class RawGuard extends Router.Middleware<RawGuard>()("/test/router/RawGuard")<{
+        readonly ok: true;
+      }>() {}
+      const AdminRoute2 = Route.make("admin2", { path: "/admin2" });
+      const { model, routeModel } = Router.make(
+        `/test/router/raw-href/${++nextRouter}`,
+        Route.group(AdminRoute2).middleware(RawGuard),
+      );
+      let calls = 0;
+      const guardLayer = RawGuard.layer(() =>
+        Effect.sync(() => {
+          calls++;
+          return { ok: true as const };
+        }),
+      );
+      const testLayer = routeModel.layer.pipe(
+        Layer.provideMerge(model.layer),
+        Layer.provideMerge(guardLayer),
+        Layer.provideMerge(testEnv()),
+      );
+      return Effect.gen(function* () {
+        const router = yield* Model.get(model);
+        // Typed as a plain `string`, not a literal — forces the RawToOptions
+        // union member, exactly like a redirect target read off `?redirect=`.
+        const target: string = "/admin2";
+        yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: target }));
+        const state = yield* Store.get(router.outputs.state);
+        assert.strictEqual(state.location.pathname, "/admin2");
+        assert.strictEqual(calls, 1);
+      }).pipe(Effect.provide(testLayer));
+    });
+  });
+
   it.effect("history-driven navigation (back/forward, manual URL) recommits matches", () => {
     // Regression: the history subscriber must run the FULL dispatch step —
     // a bare publish fed pubsub subscribers but never the commit handler,
     // so browser back/forward silently changed the URL without the state.
-    const { NavigationModel: Nav, RouteModel: Routes } = makeRouter();
+    const { model: Nav, routeModel: Routes } = makeRouter();
     let capturedHistory: Router.RouterHistory | undefined;
     const capturingHistoryLayer = Layer.succeed(
       Router.History,
@@ -662,18 +747,18 @@ describe("@unitflow/router", () => {
   it("keeps routes free of UI and data-loading concerns", () => {
     if (false) {
       // @ts-expect-error components live in the RouterView views map, not on routes
-      Router.route("bad-component", { path: "/", component: () => null });
+      Route.make("bad-component", { path: "/", component: () => null });
       // @ts-expect-error loaders are gone: route data belongs to the route's model + Query
-      Router.route("bad-loader", { path: "/", loader: () => Effect.succeed(1) });
+      Route.make("bad-loader", { path: "/", loader: () => Effect.succeed(1) });
       // @ts-expect-error beforeLoad is gone: gating belongs to the route's model
-      Router.route("bad-before", { path: "/", beforeLoad: () => ({}) });
+      Route.make("bad-before", { path: "/", beforeLoad: () => ({}) });
     }
     assert.isTrue(true);
   });
 
   it("types route params, search, and model-bound links", () => {
-    const { NavigationModel: TypedRouter } = makeRouter();
-    const { NavigationModel: OtherRouter } = Router.make("/test/router/other", routeGroup);
+    const { model: TypedRouter } = makeRouter();
+    const { model: OtherRouter } = Router.make("/test/router/other", routeGroup);
     const bound = undefined as unknown as BoundRouter<typeof TypedRouter>;
 
     const hrefEffect: Effect.Effect<string, unknown, any> = TypedRouter.buildHref({
@@ -690,8 +775,9 @@ describe("@unitflow/router", () => {
       TypedRouter.buildHref({ to: "/users/:id", params: { id: "1" }, search: { page: 1 } });
       // @ts-expect-error search input is typed
       TypedRouter.buildHref({ to: "/users/:id", params: { id: 1 }, search: { page: "1" } });
-      // @ts-expect-error paths are constrained to declared route paths
-      TypedRouter.buildHref({ to: "/missing" });
+      // "/missing" is a raw href, not a declared route path — valid on its
+      // own (same union `navigate` accepts), just untyped params/search.
+      void TypedRouter.buildHref({ to: "/missing" });
       // Providing the WRONG router's layer must not discharge the requirement:
       // the leftover service id keeps the effect from typing as Registry-only.
       // @ts-expect-error DI is tied to the concrete router service id

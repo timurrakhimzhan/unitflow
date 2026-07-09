@@ -1,23 +1,16 @@
 /**
- * The curated public surface re-exported as the `Router` namespace.
- * Everything from `router.ts` EXCEPT the controller plumbing
+ * The curated public surface re-exported as the `Router` namespace: only
+ * what's genuinely about the whole app-level router. Route declaration and
+ * composition (`Route.make`, `Route.group`, `Route.addChild`, ...) lives
+ * under the `Route` namespace instead (`route.ts`) — a route is its own
+ * primitive, the same standing as a `Query` or a `Store`, not a verb inside
+ * `Router`. EXCEPT the controller plumbing
  * (`RouterController`/`AnyRouterController`/`RouterControllerOf`): that is
  * the synchronous read surface behind `outputs.api` — `react.tsx` and the
  * `buildLocation`/`buildHref`/`matchRoute` helpers use it internally, but
  * application code should never need to name it.
  */
 export {
-  // route + group construction
-  search,
-  schemaSearch,
-  isRoute,
-  route,
-  group,
-  makeGroup,
-  add,
-  merge,
-  prefix,
-  routes,
   // redirect / not-found
   RedirectError,
   NotFoundError,
@@ -25,7 +18,7 @@ export {
   isNotFoundError,
   // middleware
   Middleware,
-  // router model
+  // the AppRouter constructor
   make,
   // histories — provided as layers; the create* factories stay exported for
   // custom History implementations
@@ -91,5 +84,7 @@ export type {
   MatchByPath,
   MatchUnion,
   ToOptions,
+  RawToOptions,
   NavigateOptions,
+  AppRouter,
 } from "./router.js";

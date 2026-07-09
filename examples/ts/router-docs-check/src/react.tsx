@@ -5,7 +5,7 @@ import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Option from "effect/Option";
 import { View } from "@unitflow/react";
 import { Link, RouterView } from "@unitflow/router/react";
-import { NavigationModel, UserRoute } from "./routes";
+import { AppRouter, UserRoute } from "./routes";
 import { UserPageModel } from "./models";
 
 const UserPage = View.make(UserPageModel, ({ user, refresh }) => {
@@ -27,7 +27,7 @@ const UserPage = View.make(UserPageModel, ({ user, refresh }) => {
 // #endregion views
 
 // #region stitch
-export const AppView = RouterView.make(NavigationModel, {
+export const AppView = RouterView.make(AppRouter.model, {
   routes: {
     // a plain function is a view: it gets the bound router, its route's
     // narrowed match, and the deeper match as children
@@ -58,12 +58,10 @@ import { createRoot } from "react-dom/client";
 import * as Layer from "effect/Layer";
 import { Unitflow, UnitflowRuntime } from "@unitflow/react";
 import { Router } from "@unitflow/router";
-import { RouteModel } from "./routes";
 
 const layer = AppView.model.layer.pipe(
   Layer.provideMerge(UserPageModel.layer),
-  Layer.provideMerge(RouteModel.layer),
-  Layer.provideMerge(NavigationModel.layer),
+  Layer.provideMerge(AppRouter.layer),
   Layer.provideMerge(Router.browserHistoryLayer),
 );
 const runtime = UnitflowRuntime.make(layer);

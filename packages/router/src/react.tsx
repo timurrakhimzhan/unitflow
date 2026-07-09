@@ -56,7 +56,26 @@ type RouteById<M extends Router.AnyRouter, Id> = Extract<
   { readonly id: Id }
 >;
 
+/** What a route id may bind to: a plain component, a model-bound view (see
+ * {@link ModelViewEntry}), or — when that route has declared children via
+ * `Route.addChild`/`Route.layout` — a `{ view, routes }` node whose nested
+ * `routes` mirrors those children one-to-one. `view` still renders the
+ * matched descendant as `children`, exactly like the flat shorthand does. */
+export type RouteNode<
+  M extends Router.AnyRouter,
+  Id extends Router.RouteIds<Router.RouterGroupOf<M>>,
+  Units,
+> =
+  | RouteComponent<M, Router.RouteMatch<RouteById<M, Id>>, Units>
+  | ModelViewEntry
+  | {
+      readonly view: RouteComponent<M, Router.RouteMatch<RouteById<M, Id>>, Units> | ModelViewEntry;
+      readonly routes?: RoutesConfig<M, Units>;
+    };
 
+export type RoutesConfig<M extends Router.AnyRouter = Router.RegisteredRouter, Units = void> = {
+  readonly [Id in Router.RouteIds<Router.RouterGroupOf<M>>]?: RouteNode<M, Id, Units>;
+};
 
 /**
  * The one place a router meets rendering: a route only declares `model` (or
@@ -64,17 +83,15 @@ type RouteById<M extends Router.AnyRouter, Id> = Extract<
  * route id, plus the pending/error/not-found boundaries, entirely outside
  * `@unitflow/router` itself. Keys are constrained to the router's actual
  * route ids (a typo will not compile), and each view's `match` is narrowed
- * to ITS route's params/search types.
+ * to ITS route's params/search types. Nesting a `{ view, routes }` node
+ * under a route mirrors that route's declared `Route.addChild`/`Route.layout`
+ * children — a plain entry (no `routes`) leaves any deeper match unwrapped.
  */
 export interface RouterViews<
   M extends Router.AnyRouter = Router.RegisteredRouter,
   Units = void,
 > {
-  readonly routes: {
-    readonly [Id in Router.RouteIds<Router.RouterGroupOf<M>>]?:
-      | RouteComponent<M, Router.RouteMatch<RouteById<M, Id>>, Units>
-      | ModelViewEntry;
-  };
+  readonly routes: RoutesConfig<M, Units>;
   readonly pending?: BoundaryComponent<M>;
   readonly error?: BoundaryComponent<M>;
   readonly notFound?: BoundaryComponent<M>;
@@ -115,7 +132,7 @@ export function Matches<M extends Router.AnyRouter = Router.RegisteredRouter, Un
     return views.pending === undefined ? null : <>{views.pending({ router })}</>;
   }
   return (
-    <MatchRenderer router={router} views={views} units={units} pages={pages} state={state} index={0} />
+    <MatchRenderer router={router} nodes={views.routes} units={units} pages={pages} state={state} index={0} />
   );
 }
 
@@ -139,6 +156,29 @@ export type RouterViewComponent<M extends Router.AnyRouter, Units> = React.FC<
   >;
 };
 
+/** Walks the (possibly nested) routes config collecting every route id's
+ * page model, wherever in the tree it's declared — a `{ view, routes }`
+ * node's own `view` counts just like a top-level shorthand entry does. */
+const collectPageModels = (
+  nodes: Readonly<Record<string, unknown>>,
+  into: Record<string, Model.AnyService>,
+): void => {
+  for (const [routeId, entry] of Object.entries(nodes)) {
+    if (entry === undefined) continue;
+    if (typeof entry === "function" && "model" in entry) {
+      into[routeId] = (entry as ModelViewEntry).model;
+      continue;
+    }
+    if (typeof entry === "object" && entry !== null && "view" in entry) {
+      const node = entry as { readonly view: unknown; readonly routes?: Readonly<Record<string, unknown>> };
+      if (typeof node.view === "function" && "model" in node.view) {
+        into[routeId] = (node.view as ModelViewEntry).model;
+      }
+      if (node.routes !== undefined) collectPageModels(node.routes, into);
+    }
+  }
+};
+
 const makeRouterView = <M extends Router.AnyRouter, Units = void>(
   router: M,
   views: RouterViews<M, Units>,
@@ -146,11 +186,7 @@ const makeRouterView = <M extends Router.AnyRouter, Units = void>(
   // Stitch: pull the models out of the views map and let the router build
   // its pages model around them.
   const pageModels: Record<string, Model.AnyService> = {};
-  for (const [routeId, entry] of Object.entries(views.routes)) {
-    if (typeof entry === "function" && "model" in entry) {
-      pageModels[routeId] = (entry as ModelViewEntry).model;
-    }
-  }
+  collectPageModels(views.routes as Readonly<Record<string, unknown>>, pageModels);
   const pagesModel = Router.makePages(router, pageModels as never);
 
   const Bound = UnitView.make(
@@ -192,16 +228,26 @@ const makeRouterView = <M extends Router.AnyRouter, Units = void>(
 export const RouterView = { make: makeRouterView };
 export const View = RouterView;
 
+/** True for a `{ view, routes }` tree node — distinguished from a bare
+ * `RouteComponent`/`ModelViewEntry` entry by NOT being callable: both of
+ * those are always functions (a `ModelViewEntry` is `View.make`'s callable
+ * result with a `.model` static, same shape `RouterViewComponent` itself
+ * has), while a nesting node is a plain object literal. */
+const isRouteTreeNode = (
+  value: unknown,
+): value is { readonly view: unknown; readonly routes?: Readonly<Record<string, unknown>> } =>
+  typeof value === "object" && value !== null && "view" in value;
+
 const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
   router,
-  views,
+  nodes,
   units,
   pages,
   state,
   index,
 }: {
   readonly router: BoundRouter<M>;
-  readonly views: RouterViews<M, Units>;
+  readonly nodes: Readonly<Record<string, unknown>>;
   readonly units: Units;
   readonly pages: Readonly<Record<string, unknown>>;
   readonly state: Router.RouterState<Router.RouterRoutes<M>>;
@@ -210,12 +256,13 @@ const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
   const match = state.matches[index] as unknown as Router.RouteMatch | undefined;
   if (match === undefined) return null;
   // The runtime id is erased to `string`; the map itself is keyed strictly.
-  // eslint-disable-next-line revizo/no-type-assertion
-  const entry = (
-    views.routes as Readonly<
-      Record<string, RouteComponent<M, any, Units> | ModelViewEntry | undefined>
-    >
-  )[match.route.id];
+  const entry = nodes[match.route.id];
+  const isNode = isRouteTreeNode(entry);
+  const view = entry === undefined ? undefined : isNode ? entry.view : entry;
+  // A node without a declared `routes` sub-tree (or no entry at all) has
+  // nothing to look up a deeper match against — descendants beyond that
+  // point render unwrapped, mirroring the flat map's old "no entry" case.
+  const nextNodes = isNode && entry.routes !== undefined ? entry.routes : {};
   // `null` (not an empty renderer element) when no deeper match exists, so
   // a layout's `children ?? fallback` — and a parent page deciding between
   // its own content and a child's — actually work.
@@ -223,17 +270,17 @@ const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
     index + 1 < state.matches.length ? (
       <MatchRenderer
         router={router}
-        views={views}
+        nodes={nextNodes}
         units={units}
         pages={pages}
         state={state}
         index={index + 1}
       />
     ) : null;
-  if (entry === undefined) return child;
-  if ("model" in entry) {
+  if (view === undefined) return child;
+  if ("model" in (view as object)) {
     // A model-bound view: its unit was leased by the pages model.
-    const PageView = entry as unknown as React.FC<{
+    const PageView = view as unknown as React.FC<{
       readonly unit: unknown;
       readonly children?: React.ReactNode;
     }>;
@@ -241,7 +288,7 @@ const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
       <PageView unit={pages[match.route.id]}>{child}</PageView>
     );
   }
-  const RouteView = entry;
+  const RouteView = view as RouteComponent<M, any, Units>;
   return (
     <RouteView router={router} match={match as never} units={units}>
       {child}

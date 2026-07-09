@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { Model, Query } from "@unitflow/react";
-import { Router } from "@unitflow/router";
+import { Route, Router } from "@unitflow/router";
 import { UsersApi } from "./api";
 
 const userParams = Schema.Struct({ id: Schema.NumberFromString });
@@ -14,23 +14,29 @@ const usersSearch = Schema.Struct({
 });
 
 /** Routes declare paths and codecs only. */
-export const HomeRoute = Router.route("home", { path: "/" });
-export const UsersRoute = Router.route("users", { path: "/users", search: usersSearch });
-export const UserRoute = Router.route("user", {
-  path: "/users/:id",
+export const HomeRoute = Route.make("home", { path: "/" });
+/** `path` is relative to `UsersRoute` below — `Route.addChild` joins it: the
+ * declared table ends up with `/users/:id`, not `/:id`. */
+export const UserRoute = Route.make("user", {
+  path: "/:id",
   params: userParams,
   search: userSearch,
 });
+/** `/users/:id` is a real child PAGE of `/users` — declared explicitly via
+ * `addChild`, never inferred from the shared path prefix. */
+export const UsersRoute = Route.make("users", { path: "/users", search: usersSearch }).pipe(
+  Route.addChild(UserRoute),
+);
 
-/** Router.make births BOTH models at once; the app only names them. */
-export const { NavigationModel, RouteModel } = Router.make(
+/** Router.make births the whole AppRouter at once; the app only names it. */
+export const AppRouter = Router.make(
   "@unitflow/example/router-basic/router",
-  Router.group(HomeRoute, UsersRoute, UserRoute),
+  Route.group(HomeRoute, UsersRoute),
 );
 
 declare module "@unitflow/router" {
   interface Register {
-    readonly router: typeof NavigationModel;
+    readonly router: typeof AppRouter.model;
   }
 }
 
@@ -41,7 +47,7 @@ export class UsersPageModel extends Model.Service<UsersPageModel>()(
 )({
   make: () =>
     Effect.gen(function* () {
-      const unit = yield* Model.get(RouteModel, "users");
+      const unit = yield* Model.get(AppRouter.routeModel, "users");
       const list = yield* Query.make({
         // The decoded search object is a plain dependency: changing
         // ?filter={"role":...} re-runs the query.
@@ -73,7 +79,7 @@ export class UserPageModel extends Model.Service<UserPageModel>()(
 )({
   make: () =>
     Effect.gen(function* () {
-      const unit = yield* Model.get(RouteModel, "user");
+      const unit = yield* Model.get(AppRouter.routeModel, "user");
       const user = yield* Query.make({
         stores: { params: unit.outputs.params },
         handler: ({ params }) =>

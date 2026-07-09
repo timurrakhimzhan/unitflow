@@ -23,7 +23,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { Model, Store } from "@unitflow/core";
-import { Router } from "@unitflow/router";
+import { Route, Router } from "@unitflow/router";
 
 interface SessionShape {
   readonly currentUser: Effect.Effect<Option.Option<string>>;
@@ -75,24 +75,28 @@ the guarded page.
 ## Attaching to Routes
 
 `middleware` attaches the tag to every route currently in a group — the
-same composition shape as `add`/`merge`/`prefix`. A guard shared by parent
-and child routes in one matched branch runs once per navigation.
+same composition shape as `add`/`merge`/`prefix`. Attaching it to a route
+with declared children (via [`Route.addChild`/`Route.layout`](/router/routes/#nesting-routeaddchild-and-routelayout))
+guards the whole branch: `resolveMatches` walks the explicit ancestor chain,
+so the guard runs once per navigation into that route OR any of its
+descendants — group-wide `middleware` is only needed for independent routes
+with no shared parent.
 
 ```ts
-const DashboardRoute = Router.route("dashboard", { path: "/dashboard" });
-const MembersRoute = Router.route("members", { path: "/members" });
+const DashboardRoute = Route.make("dashboard", { path: "/dashboard" });
+const MembersRoute = Route.make("members", { path: "/members" });
 
-const adminRoutes = Router.group(DashboardRoute, MembersRoute)
+const adminRoutes = Route.group(DashboardRoute, MembersRoute)
   .middleware(AuthGuard)
   .prefix("/admin");
 
-export const { NavigationModel: AdminNav, RouteModel: AdminRouteModel } = Router.make(
+export const AdminRouter = Router.make(
   "docs/admin-router",
-  Router.group(Router.route("home", { path: "/" })).merge(adminRoutes),
+  Route.group(Route.make("home", { path: "/" })).merge(adminRoutes),
 );
 ```
 
-Forget `AuthGuardLive` in the layer composition and `AdminNav.layer` does
+Forget `AuthGuardLive` in the layer composition and `AdminRouter.layer` does
 not typecheck — a missing guard is a compile error, not a runtime surprise.
 
 ## Reading the Provides
@@ -104,7 +108,7 @@ is `true`.
 
 ```ts
 const readProvided = Effect.gen(function* () {
-  const unit = yield* Model.get(AdminRouteModel, "dashboard");
+  const unit = yield* Model.get(AdminRouter.routeModel, "dashboard");
   const provided = yield* Store.get(unit.outputs.provided);
   // Option.some({ user }) whenever the route is open: the guard passing is
   // what LET it open
