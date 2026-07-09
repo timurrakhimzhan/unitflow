@@ -1,4 +1,5 @@
-import { Event, Model, Store } from "@unitflow/core";
+import { Event, Model, Query, Store } from "@unitflow/core";
+import type * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import { InstanceScope, Registry } from "@unitflow/core/registry";
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
@@ -1156,6 +1157,120 @@ export const makePages = <M extends AnyRouter, const Pages extends PageMap<Route
     Pages
   >;
 };
+
+export interface RouteModelData<R extends Route.Any> {
+  readonly params: Route.Params<R>;
+  readonly search: Route.Search<R>;
+  readonly provided: Route.Provided<R>;
+}
+
+export interface RouteModelOptions<R extends Route.Any, A, E, Requires> {
+  /** Called (and re-called, reactively — same idiom as `Query`'s `handler`)
+   * whenever the route is open, with `params`/`search`/`provided` already
+   * unwrapped: no `Option.isNone` ceremony, because THIS function only ever
+   * runs while the route actually is open — the same guarantee
+   * `match.provided` gets for free inside a `RouterView` render, extended
+   * to the model side. */
+  readonly make: (data: RouteModelData<R>) => Effect.Effect<A, E, Requires>;
+}
+
+export interface RouteBoundShape<A, E> extends Model.Shape {
+  readonly inputs: Record<never, never>;
+  readonly outputs: Record<never, never>;
+  readonly ui: {
+    readonly state: Store.Store<AsyncResult.AsyncResult<A, E | "closed">>;
+    readonly refresh: Event.Event<void>;
+  };
+}
+
+/** What {@link makeModel} returns: a singleton gated on one route, keyed
+ * off that route's own model so two different routes' bound models never
+ * collide. */
+export interface RouteBoundModel<
+  Id extends string,
+  Group extends AnyRouteGroup,
+  RouteId extends RouteIds<Group>,
+  A,
+  E,
+> extends Model.ServiceClass<
+    RouteBoundModel<Id, Group, RouteId, A, E>,
+    `${Id}/routes/${RouteId}/model`,
+    void,
+    RouteBoundShape<A, E>,
+    never,
+    RouteModel<Id, Group> | Registry
+  > {}
+
+/** Sugar over `Model.Service` for the extremely common "page model gated on
+ * one route" shape: wires `Model.get(routeModel, routeId)` and a `Query`
+ * keyed on that route's `opened`/`params`/`search`/`provided` ports, and
+ * fails the query into `"closed"` while the route isn't open — the exact
+ * `Option.isNone(params) ? Effect.fail("closed") : ...` ternary every page
+ * model in the docs already hand-writes, just not hand-written. Reach for
+ * `Model.Service` directly instead when a page needs its own `inputs`/extra
+ * `ui` beyond one gated `state`/`refresh` pair. */
+export const makeModel = <
+  Id extends string,
+  Group extends AnyRouteGroup,
+  const RouteId extends RouteIds<Group>,
+  A,
+  E = never,
+  Requires = never,
+>(
+  routeModel: RouteModel<Id, Group>,
+  routeId: RouteId,
+  options: RouteModelOptions<Extract<RoutesOf<Group>, { readonly id: RouteId }>, A, E, Requires>,
+): RouteBoundModel<Id, Group, RouteId, A, E> =>
+  Model.Service<RouteBoundModel<Id, Group, RouteId, A, E>>()(
+    // eslint-disable-next-line revizo/no-type-assertion
+    `${routeModel.modelKey}/${String(routeId)}/model` as `${Id}/routes/${RouteId}/model`,
+  )({
+    make: () =>
+      Effect.gen(function* () {
+        // TS cannot reduce `KeyArgs<KeyOf<M>>` for a still-generic `Group`
+        // (same class of deferred-conditional gap `Model.get`'s own
+        // implementation already boundary-casts around) — one cast to the
+        // type this call is known to actually produce.
+        // eslint-disable-next-line revizo/no-type-assertion
+        const unit = (yield* Model.get(
+          routeModel as never,
+          routeId as never,
+        )) as RouteShapes<Group>[RouteId];
+        // ONE combined store, not four separate Query dependencies: the
+        // router commits opened/params/search/provided as four distinct
+        // Store.set calls per navigation, and Query re-runs its handler
+        // once per dependency that changes — four raw dependencies would
+        // re-fetch four times per navigation instead of once.
+        const combined = Store.combine(
+          [unit.outputs.opened, unit.outputs.params, unit.outputs.search, unit.outputs.provided],
+          (opened, params, search, provided) => ({ opened, params, search, provided }),
+        );
+        const gated = (deps: {
+          readonly opened: boolean;
+          readonly params: Option.Option<unknown>;
+          readonly search: Option.Option<unknown>;
+          readonly provided: Option.Option<unknown>;
+        }): Effect.Effect<A, E | "closed", Requires> =>
+          !deps.opened ||
+          Option.isNone(deps.params) ||
+          Option.isNone(deps.search) ||
+          Option.isNone(deps.provided)
+            ? Effect.fail("closed" as const)
+            : options.make({
+                // eslint-disable-next-line revizo/no-type-assertion
+                params: deps.params.value as never,
+                // eslint-disable-next-line revizo/no-type-assertion
+                search: deps.search.value as never,
+                // eslint-disable-next-line revizo/no-type-assertion
+                provided: deps.provided.value as never,
+              });
+        const query = yield* Query.make({
+          stores: { data: combined },
+          handler: ({ data }) => gated(data),
+        });
+        return { inputs: {}, outputs: {}, ui: { state: query.state, refresh: query.refresh } };
+      }),
+  }) as unknown as RouteBoundModel<Id, Group, RouteId, A, E>;
 
 const makeShape = <Group extends AnyRouteGroup>(
   routeGroup: Group,

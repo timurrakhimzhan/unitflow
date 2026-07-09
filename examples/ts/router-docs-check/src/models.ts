@@ -4,7 +4,7 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { Event, Model, Query, Registry, Store } from "@unitflow/core";
-import { Router } from "@unitflow/router";
+import { Route, Router } from "@unitflow/router";
 import { AppRouter } from "./routes";
 
 const program = Effect.gen(function* () {
@@ -105,6 +105,14 @@ export class ProjectEditModel extends Model.Service<ProjectEditModel>()("docs/Pr
     }),
 }) {}
 // #endregion nested-recipe
+
+// #region make-model
+// Same as UserPageModel above — Model.get + Query, gated on "closed" — but
+// params/search/provided arrive unwrapped: no Option.isNone anywhere.
+export const UserPageModel2 = Route.makeModel(AppRouter.routeModel, "user", {
+  make: ({ params }) => fetchUser(params.id),
+});
+// #endregion make-model
 
 // #region layers
 import * as Layer from "effect/Layer";

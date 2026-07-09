@@ -845,4 +845,66 @@ describe("@unitflow/router", () => {
     assert.isDefined(nav);
     assert.isDefined(match);
   });
+
+  it.effect("makeModel gates on the route being open and reacts to param changes", () => {
+    const ItemRoute = Route.make("item", {
+      path: "/items/:id",
+      params: Schema.Struct({ id: Schema.NumberFromString }),
+    });
+    const OtherRoute = Route.make("other", { path: "/other" });
+    const { model, routeModel } = Router.make(
+      `/test/router/make-model/${++nextRouter}`,
+      Route.group(ItemRoute, OtherRoute),
+    );
+
+    const calls: Array<number> = [];
+    // no Option.isNone anywhere — params arrive unwrapped, decoded
+    const ItemPageModel = Route.makeModel(routeModel, "item", {
+      make: ({ params }) =>
+        Effect.sync(() => {
+          calls.push(params.id);
+          return { id: params.id };
+        }),
+    });
+
+    const testLayer = ItemPageModel.layer.pipe(
+      Layer.provideMerge(routeModel.layer),
+      Layer.provideMerge(model.layer),
+      Layer.provideMerge(testEnv()),
+    );
+
+    return Effect.gen(function* () {
+      const router = yield* Model.get(model);
+      const page = yield* Model.get(ItemPageModel);
+
+      // closed before navigating: no route open, nothing fetched yet
+      assert.strictEqual((yield* Store.get(page.ui.state))._tag, "Failure");
+      assert.deepStrictEqual(calls, []);
+
+      yield* Registry.allSettled(
+        Event.emit(router.inputs.navigate, { to: "/items/:id", params: { id: 1 } }),
+      );
+      yield* Store.waitFor(page.ui.state, (result) => result._tag === "Success");
+      assert.deepStrictEqual(calls, [1]);
+      const first = yield* Store.get(page.ui.state);
+      assert.strictEqual(first._tag, "Success");
+      if (first._tag === "Success") assert.deepStrictEqual(first.value, { id: 1 });
+
+      // navigating to a different id re-runs make with the fresh param
+      yield* Registry.allSettled(
+        Event.emit(router.inputs.navigate, { to: "/items/:id", params: { id: 2 } }),
+      );
+      yield* Store.waitFor(page.ui.state, (result) =>
+        result._tag === "Success" && result.value.id === 2,
+      );
+      assert.deepStrictEqual(calls, [1, 2]);
+
+      // leaving the route fails the query into "closed", not a stale value
+      yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/other" }));
+      yield* Store.waitFor(page.ui.state, (result) => result._tag === "Failure");
+      const closed = yield* Store.get(page.ui.state);
+      assert.strictEqual(closed._tag, "Failure");
+      assert.deepStrictEqual(calls, [1, 2]);
+    }).pipe(Effect.provide(testLayer));
+  });
 });
