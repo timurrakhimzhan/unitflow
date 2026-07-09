@@ -4,25 +4,17 @@ export * as Route from "./route.js";
 // declaration emitter cannot name the symbols flowing through in a
 // composite/declaration consumer build (TS2742/TS2883) — it falls back to
 // the private `dist/router.d.ts` path, which the package's `exports` map
-// does not expose. `Route`'s own namespace re-export needs this same
-// treatment `Router`'s already had, and missed it when `Route` was split
-// out (router 0.2.0 shipped with this gap: `Route.layout`'s return type
-// leaked an unexported helper, TS2742, in any composite consumer).
-//
-// Curated, not a blanket `export type * from "./route.js"`: that pulls in
-// `make` (`Route.make`'s type) too, which collides with `./public.js`'s own
-// `make` (`Router.make`), and `Route`/`RouteGroup`/etc., which collide with
-// the `export * as Route` namespace binding right above. `./public.js`
-// already re-exports those (it always has); only the internal helper types
-// new to the `Route` namespace's combinators need adding here.
+// does not expose. Named from `./public.js` (not `./router.js`, and not
+// `./route.js` — that's not in the `exports` map either) so the curated
+// boundary holds AND every type stays reachable through one blessed path:
+// `Route`'s own combinators (`addChild`/`layout`/`prefix`/`middleware`)
+// route through `public.ts`'s type list too, rather than a SECOND
+// `export type *` from `./route.js` here — that would collide with
+// `make`/`Route`/`RouteGroup`, which `./route.js` ALSO exports, either
+// under the same name for something unrelated (`Route.make` vs
+// `Router.make`) or the same thing reached a different way (the
+// `export * as Route` namespace binding right above).
 export type * from "./public.js";
-export type {
-  WithChild,
-  PrefixedTuple,
-  PrefixedRoute,
-  WithMiddleware,
-  MembersOf,
-} from "./route.js";
 
 /**
  * Registration point for the app's router. Declared HERE — in the package

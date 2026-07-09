@@ -54,6 +54,17 @@ export type {
   RouteGroup,
   AnyRouteGroup,
   RoutesOf,
+  // Internal machinery, not meant to be named directly in application code
+  // — exported ONLY so a downstream composite/declaration build can print
+  // them when they surface inside `addChild`/`layout`/`prefix`/`middleware`'s
+  // return types (an unexported type referenced from an exported signature
+  // is a hard TS2742/TS2883 error — see `RoutesOf` above, the same
+  // treatment `index.ts`'s `export type *` needs a REAL export to forward).
+  WithChild,
+  PrefixedTuple,
+  PrefixedRoute,
+  WithMiddleware,
+  MembersOf,
   ParsedLocation,
   RouterHistory,
   HistoryFactory,

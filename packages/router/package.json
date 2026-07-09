@@ -1,6 +1,6 @@
 {
   "name": "@unitflow/router",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "Effect-native, Unitflow-aware typed router with React bindings.",
   "license": "MIT",
