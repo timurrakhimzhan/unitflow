@@ -8,6 +8,15 @@
   "files": [
     "dist"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/timurrakhimzhan/unitflow.git",
+    "directory": "packages/router"
+  },
+  "bugs": {
+    "url": "https://github.com/timurrakhimzhan/unitflow/issues"
+  },
+  "homepage": "https://github.com/timurrakhimzhan/unitflow#readme",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
