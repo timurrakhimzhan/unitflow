@@ -84,25 +84,6 @@ export class UserPageModel extends Model.Service<UserPageModel>()("docs/UserPage
 Revalidation is per page — `Event.emit(model.ui.refresh)` — not a global
 router invalidate.
 
-## `Route.makeModel`: the same thing, without the `Option.isNone` ceremony
-
-`Route.makeModel` is sugar over exactly the `UserPageModel` shape above:
-`Model.get` + a `Query` gated on the route, already wired. `make` only runs
-while the route is open, so `params`/`search`/`provided` arrive unwrapped —
-the same guarantee `match.provided` gets for free inside a `RouterView`
-render, extended to the model side:
-
-```ts
-export const UserPageModel = Route.makeModel(AppRouter.routeModel, "user", {
-  make: ({ params }) => fetchUser(params.id), // params.id: number, not Option
-});
-```
-
-The result exposes `ui.state` (an `AsyncResult<A, E | "closed">`, same as
-`Query.state`) and `ui.refresh`. Reach for `Model.Service` directly instead
-when a page needs its own `inputs`, extra `ui` ports beyond one gated
-value, or data that isn't fully determined by this one route.
-
 ## Navigating
 
 Navigation is an event, like any model input. When a program needs the

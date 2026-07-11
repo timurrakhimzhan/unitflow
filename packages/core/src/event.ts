@@ -77,6 +77,38 @@ export const make = <A = void>(options?: Options): Event<A> => ({
 export const isEvent = (value: unknown): value is Event<unknown> =>
   typeof value === "object" && value !== null && TypeId in value;
 
+const InputTypeId = Symbol.for("@unitflow/core/Event/Input");
+
+/** An `Event.input()` result — distinguished from a plain `Source` so
+ * `Model.Shape`'s `inputs` section can allow this one specifically. */
+export interface InputSource<A> extends Source<A> {
+  readonly [InputTypeId]: typeof InputTypeId;
+}
+
+/**
+ * An event meant to sit in a model's `inputs`, typed as its `Source`: the
+ * owning model can only subscribe (`stream`/`waitFor`) — never `emit` it on
+ * itself. `Model.Shape`'s `inputs` section narrows the SAME descriptor to
+ * `Sink` for everyone else (`Model.get`, a View), the same way it already
+ * narrows a model's `outputs` down to `Source`. Runtime-identical to
+ * {@link make} plus one marker — a type-only split, not a second event. */
+export const input = <A = void>(options?: Options): InputSource<A> => ({
+  ...make<A>(options),
+  [InputTypeId]: InputTypeId,
+});
+
+/** Narrows an EXISTING full event (not one this `make` is constructing
+ * fresh) to its `Source` view, for placement in `inputs` — e.g. `Query`'s
+ * own `refresh` (documented to be safe to expose directly as an input,
+ * even though the query's internals also emit it), or an `Event.setter`
+ * over a store the model already owns outright. Same object, same id — a
+ * type-only view, not a copy; the original reference keeps full capability
+ * wherever the model already legitimately uses it. */
+export const toInput = <A>(event: Event<A>): InputSource<A> => ({
+  ...event,
+  [InputTypeId]: InputTypeId,
+});
+
 const SetterTypeId = Symbol.for("@unitflow/core/SetterEvent");
 
 /** An event-shaped port backed by a store: emitting writes the value into the
@@ -318,6 +350,34 @@ const subscribedSource = <A>(
 export const stream = <A>(event: Source<A>): Stream.Stream<A, never, Registry> => {
   if (isSetter(event)) return Store.stream(targetOf(event));
   return Stream.unwrap(subscribedSource(event));
+};
+
+type ForwardInput<A> = Source<A> | Effect.Effect<Source<A>, any, any>;
+
+type ForwardResult<A, Input extends ForwardInput<A>> =
+  Input extends Effect.Effect<infer E extends Source<A>, infer EffE, infer EffR>
+    ? Effect.Effect<E, EffE, EffR | Registry>
+    : Input extends Source<A>
+      ? Effect.Effect<Input, never, Registry>
+      : never;
+
+/** Subscribes to `source` and emits every occurrence into `sink` — forked
+ * into the enclosing model's scope, same lifetime as `Registry.run`.
+ * Data-last, and same dual-input shape as {@link handler}: pipe a plain
+ * event/store or something that resolves to one, e.g.
+ * `store.pipe(Store.changed, Event.forwardTo(sink))`. Resolves to the
+ * source, like `handler`, so the pipe can keep going. */
+export const forwardTo = <A>(sink: Sink<A>) => {
+  const attach = (
+    sourceOrEffect: Source<A> | Effect.Effect<Source<A>, unknown, unknown>,
+  ): Effect.Effect<Source<A>, unknown, unknown> =>
+    Effect.isEffect(sourceOrEffect)
+      ? Effect.flatMap(sourceOrEffect, attach)
+      : Effect.as(
+          Registry.run(stream(sourceOrEffect).pipe(Stream.mapEffect((value) => emit(sink, value)))),
+          sourceOrEffect,
+        );
+  return attach as <Input extends ForwardInput<A>>(source: Input) => ForwardResult<A, Input>;
 };
 
 /** `waitFor` options without a timeout: the wait can only end with a match

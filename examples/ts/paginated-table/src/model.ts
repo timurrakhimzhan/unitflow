@@ -66,7 +66,7 @@ export class RepoTableModel extends Model.Service<RepoTableModel>()(
       );
 
       return {
-        inputs: { refresh: rows.refresh },
+        inputs: { refresh: Event.toInput(rows.refresh) },
         outputs: { rows: rows.state },
         ui: {
           rows: rows.state,

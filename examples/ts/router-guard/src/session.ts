@@ -10,10 +10,10 @@ export class SessionModel extends Model.Service<SessionModel>()(
     Effect.gen(function* () {
       const user = Store.make<Option.Option<string>>(Option.none());
 
-      const login = yield* Event.make<string>({ name: "session.login" }).pipe(
+      const login = yield* Event.input<string>({ name: "session.login" }).pipe(
         Event.handler((name) => Store.set(user, Option.some(name))),
       );
-      const logout = yield* Event.make({ name: "session.logout" }).pipe(
+      const logout = yield* Event.input({ name: "session.logout" }).pipe(
         Event.handler(() => Store.set(user, Option.none())),
       );
 

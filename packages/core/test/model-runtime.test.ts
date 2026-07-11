@@ -9,7 +9,7 @@ class CounterModel extends Model.Service<CounterModel>()(
   make: () =>
     Effect.gen(function* () {
       const countStore = Store.make(0);
-      const incrementEvent = Event.make<number>();
+      const incrementEvent = Event.input<number>();
 
       yield* Registry.run(
         Event.stream(incrementEvent).pipe(

@@ -1,5 +1,4 @@
-import { Event, Model, Query, Store } from "@unitflow/core";
-import type * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import { Event, Model, Store } from "@unitflow/core";
 import { InstanceScope, Registry } from "@unitflow/core/registry";
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
@@ -11,6 +10,7 @@ import * as Option from "effect/Option";
 import { type Pipeable, pipeArguments } from "effect/Pipeable";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import type { ParseOptions } from "effect/SchemaAST";
 
 const RouteTypeId = Symbol.for("@unitflow/router/Route");
@@ -306,7 +306,11 @@ export namespace Route {
   export type ParamsInput<R extends Any> = R["~types"]["paramsInput"];
   export type Search<R extends Any> = R["~types"]["search"];
   export type SearchInput<R extends Any> = R["~types"]["searchInput"];
-  export type Provided<R extends Any> = R["~types"]["provided"];
+  /** What the matched branch's middlewares provide, merged — named `Output`
+   * (not `Provided`) to read symmetrically with a model's own `inputs`:
+   * a page model's `inputs.user` matches a route whose `Route.Output<R>`
+   * has a `user` field of the same type. */
+  export type Output<R extends Any> = R["~types"]["provided"];
   export type Error<R extends Any> = R["~types"]["error"];
   export type Services<R extends Any> = R["~types"]["services"];
   /** The FULLY FLATTENED set of routes `Route.addChild` attached under `R`,
@@ -605,7 +609,7 @@ export interface RouteMatch<R extends Route.Any = Route.Any> {
   readonly params: Route.Params<R>;
   readonly search: Route.Search<R>;
   /** What the matched branch's middlewares provided, parents included. */
-  readonly provided: Route.Provided<R>;
+  readonly provided: Route.Output<R>;
   readonly staticData: SearchRecord;
   readonly meta: ReadonlyArray<SearchRecord>;
   readonly links: ReadonlyArray<SearchRecord>;
@@ -730,9 +734,11 @@ export type NavigatePayload<M extends AnyRouter> = RoutePath<M> extends infer To
 
 export interface RouterShape<Group extends AnyRouteGroup> extends Model.Shape {
   readonly inputs: {
-    readonly navigate: Event.Event<NavigateOptions<RouterController<Group>, RoutePath<RouterController<Group>>>>;
-    readonly addBlocker: Event.Event<Blocker>;
-    readonly removeBlocker: Event.Event<Blocker>;
+    readonly navigate: Event.InputSource<
+      NavigateOptions<RouterController<Group>, RoutePath<RouterController<Group>>>
+    >;
+    readonly addBlocker: Event.InputSource<Blocker>;
+    readonly removeBlocker: Event.InputSource<Blocker>;
   };
   readonly outputs: {
     readonly state: Store.Store<RouterState<RoutesOf<Group>>>;
@@ -744,7 +750,9 @@ export interface RouterShape<Group extends AnyRouteGroup> extends Model.Shape {
     readonly state: Store.Store<RouterState<RoutesOf<Group>>>;
     readonly location: Store.Combined<ParsedLocation>;
     readonly matches: Store.Combined<ReadonlyArray<RouteMatch<RoutesOf<Group>>>>;
-    readonly navigate: Event.Event<NavigateOptions<RouterController<Group>, RoutePath<RouterController<Group>>>>;
+    readonly navigate: Event.InputSource<
+      NavigateOptions<RouterController<Group>, RoutePath<RouterController<Group>>>
+    >;
     readonly api: Store.Store<RouterController<Group>>;
   };
 }
@@ -764,13 +772,13 @@ export interface RouteUnitShape<R extends Route.Any> extends Model.Shape {
     readonly opened: Store.Combined<boolean>;
     readonly params: Store.Combined<Option.Option<Route.Params<R>>>;
     readonly search: Store.Combined<Option.Option<Route.Search<R>>>;
-    readonly provided: Store.Combined<Option.Option<Route.Provided<R>>>;
+    readonly provided: Store.Combined<Option.Option<Route.Output<R>>>;
   };
   readonly ui: {
     readonly opened: Store.Combined<boolean>;
     readonly params: Store.Combined<Option.Option<Route.Params<R>>>;
     readonly search: Store.Combined<Option.Option<Route.Search<R>>>;
-    readonly provided: Store.Combined<Option.Option<Route.Provided<R>>>;
+    readonly provided: Store.Combined<Option.Option<Route.Output<R>>>;
   };
 }
 
@@ -795,6 +803,49 @@ export type RouteShapes<Group extends AnyRouteGroup> = {
  * model in a singleton that leases it with the fixed key it needs. */
 export type PageMap<Group extends AnyRouteGroup> = {
   readonly [Id in RouteIds<Group>]?: Model.Singleton;
+};
+
+/** A page model's OWN declared input port value, unwrapped from the
+ * `Store`/`Event` it's declared as — the type an external `Store.set`/
+ * `Event.emit` into that port must supply. */
+type InputValue<T> = T extends Store.Store<infer A>
+  ? A
+  : T extends Store.InputSource<infer A>
+    ? A
+    : T extends Event.Event<infer A>
+      ? A
+      : T extends Event.InputSource<infer A>
+        ? A
+        : never;
+
+/** Every key a page model declares in `inputs` that ALSO names a field of
+ * its route's `Route.Output` but disagrees on the type — `never` (none)
+ * when the model is either silent on a field (doesn't want it) or agrees
+ * with it. `makePages` only ever forwards fields present on BOTH sides, by
+ * name; this is what makes a disagreeing name a compile error instead of a
+ * silently-never-forwarded field. */
+export type MismatchedInputs<R extends Route.Any, M> = M extends Model.AnyService
+  ? {
+      readonly [K in keyof Model.ShapeOf<M>["inputs"] & keyof Route.Output<R>]: InputValue<
+        Model.ShapeOf<M>["inputs"][K]
+      > extends Route.Output<R>[K]
+        ? never
+        : K;
+    }[keyof Model.ShapeOf<M>["inputs"] & keyof Route.Output<R>]
+  : never;
+
+/** Checked at `makePages`'s call site (not baked into `PageMap` itself):
+ * `Pages` there is inferred fresh from the actual object literal passed in,
+ * so `Pages[Id]` is each entry's REAL model type, not an erased bound —
+ * only there can a mismatched field name/type actually be caught. */
+export type ValidatePageMap<Group extends AnyRouteGroup, Pages> = {
+  readonly [Id in keyof Pages]: Id extends RouteIds<Group>
+    ? [MismatchedInputs<Extract<RoutesOf<Group>, { readonly id: Id }>, Pages[Id]>] extends [never]
+      ? Pages[Id]
+      : {
+          readonly ERROR: `inputs disagree with route "${Id & string}"'s Route.Output on: ${MismatchedInputs<Extract<RoutesOf<Group>, { readonly id: Id }>, Pages[Id]> & string}`;
+        }
+    : Pages[Id];
 };
 
 type PageServicesOfMap<Pages> = {
@@ -1129,10 +1180,22 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
 };
 
 /** INTERNAL (used by RouterView): the pages model — one singleton owning
- * the router and every mapped page model, the view tree's root. */
-export const makePages = <M extends AnyRouter, const Pages extends PageMap<RouterGroupOf<M>>>(
+ * the router and every mapped page model, the view tree's root.
+ *
+ * Also the one place a route's `Output` (what its middlewares merge and
+ * provide — see {@link Route.Output}) reaches a page model: for every input
+ * port a page model declares whose NAME also names a field of its own
+ * route's `Output`, this forwards that field in on every navigation where
+ * the route is matched — `ValidatePageMap` (below, in the signature) makes
+ * a name that exists on both sides but disagrees in type a compile error,
+ * so a page model's declared input type is trustworthy, never `Option`:
+ * this only ever writes while the route is actually matched. */
+export const makePages = <
+  M extends AnyRouter,
+  const Pages extends PageMap<RouterGroupOf<M>>,
+>(
   model: M,
-  pageMap: Pages,
+  pageMap: Pages & ValidatePageMap<RouterGroupOf<M>, Pages>,
 ): PagesModel<RouterIdOf<M>, RouterGroupOf<M>, Pages> => {
   const pagesService = Model.Service<PagesModel<RouterIdOf<M>, RouterGroupOf<M>, Pages>>()(
     `${model.modelKey}/pages` as `${RouterIdOf<M>}/pages`,
@@ -1144,9 +1207,31 @@ export const makePages = <M extends AnyRouter, const Pages extends PageMap<Route
         const routerPorts = yield* Model.get(model as unknown as RouterModel);
         const ui: Record<string, unknown> = { router: routerPorts };
         for (const [routeId, pageModel] of Object.entries(pageMap)) {
-          if (pageModel !== undefined) {
-            ui[routeId] = yield* Model.get(pageModel as Model.AnyService);
-          }
+          if (pageModel === undefined) continue;
+          const ports = yield* Model.get(pageModel as Model.AnyService);
+          ui[routeId] = ports;
+
+          // eslint-disable-next-line revizo/no-type-assertion
+          const inputs = (ports as { readonly inputs: Record<string, unknown> }).inputs;
+          const inputKeys = Object.keys(inputs);
+          if (inputKeys.length === 0) continue;
+          yield* Registry.run(
+            Store.stream(routerPorts.outputs.matches).pipe(
+              Stream.mapEffect((matches) => {
+                const match = matches.find((current) => current.route.id === routeId);
+                if (match === undefined) return Effect.void;
+                // eslint-disable-next-line revizo/no-type-assertion
+                const provided = match.provided as Record<string, unknown>;
+                return Effect.forEach(
+                  inputKeys.filter((key) => key in provided),
+                  (key) =>
+                    // eslint-disable-next-line revizo/no-type-assertion
+                    Store.set(inputs[key] as Store.Sink<unknown>, provided[key]),
+                  { discard: true },
+                );
+              }),
+            ),
+          );
         }
         return { inputs: {}, outputs: {}, ui } as never;
       }),
@@ -1157,120 +1242,6 @@ export const makePages = <M extends AnyRouter, const Pages extends PageMap<Route
     Pages
   >;
 };
-
-export interface RouteModelData<R extends Route.Any> {
-  readonly params: Route.Params<R>;
-  readonly search: Route.Search<R>;
-  readonly provided: Route.Provided<R>;
-}
-
-export interface RouteModelOptions<R extends Route.Any, A, E, Requires> {
-  /** Called (and re-called, reactively — same idiom as `Query`'s `handler`)
-   * whenever the route is open, with `params`/`search`/`provided` already
-   * unwrapped: no `Option.isNone` ceremony, because THIS function only ever
-   * runs while the route actually is open — the same guarantee
-   * `match.provided` gets for free inside a `RouterView` render, extended
-   * to the model side. */
-  readonly make: (data: RouteModelData<R>) => Effect.Effect<A, E, Requires>;
-}
-
-export interface RouteBoundShape<A, E> extends Model.Shape {
-  readonly inputs: Record<never, never>;
-  readonly outputs: Record<never, never>;
-  readonly ui: {
-    readonly state: Store.Store<AsyncResult.AsyncResult<A, E | "closed">>;
-    readonly refresh: Event.Event<void>;
-  };
-}
-
-/** What {@link makeModel} returns: a singleton gated on one route, keyed
- * off that route's own model so two different routes' bound models never
- * collide. */
-export interface RouteBoundModel<
-  Id extends string,
-  Group extends AnyRouteGroup,
-  RouteId extends RouteIds<Group>,
-  A,
-  E,
-> extends Model.ServiceClass<
-    RouteBoundModel<Id, Group, RouteId, A, E>,
-    `${Id}/routes/${RouteId}/model`,
-    void,
-    RouteBoundShape<A, E>,
-    never,
-    RouteModel<Id, Group> | Registry
-  > {}
-
-/** Sugar over `Model.Service` for the extremely common "page model gated on
- * one route" shape: wires `Model.get(routeModel, routeId)` and a `Query`
- * keyed on that route's `opened`/`params`/`search`/`provided` ports, and
- * fails the query into `"closed"` while the route isn't open — the exact
- * `Option.isNone(params) ? Effect.fail("closed") : ...` ternary every page
- * model in the docs already hand-writes, just not hand-written. Reach for
- * `Model.Service` directly instead when a page needs its own `inputs`/extra
- * `ui` beyond one gated `state`/`refresh` pair. */
-export const makeModel = <
-  Id extends string,
-  Group extends AnyRouteGroup,
-  const RouteId extends RouteIds<Group>,
-  A,
-  E = never,
-  Requires = never,
->(
-  routeModel: RouteModel<Id, Group>,
-  routeId: RouteId,
-  options: RouteModelOptions<Extract<RoutesOf<Group>, { readonly id: RouteId }>, A, E, Requires>,
-): RouteBoundModel<Id, Group, RouteId, A, E> =>
-  Model.Service<RouteBoundModel<Id, Group, RouteId, A, E>>()(
-    // eslint-disable-next-line revizo/no-type-assertion
-    `${routeModel.modelKey}/${String(routeId)}/model` as `${Id}/routes/${RouteId}/model`,
-  )({
-    make: () =>
-      Effect.gen(function* () {
-        // TS cannot reduce `KeyArgs<KeyOf<M>>` for a still-generic `Group`
-        // (same class of deferred-conditional gap `Model.get`'s own
-        // implementation already boundary-casts around) — one cast to the
-        // type this call is known to actually produce.
-        // eslint-disable-next-line revizo/no-type-assertion
-        const unit = (yield* Model.get(
-          routeModel as never,
-          routeId as never,
-        )) as RouteShapes<Group>[RouteId];
-        // ONE combined store, not four separate Query dependencies: the
-        // router commits opened/params/search/provided as four distinct
-        // Store.set calls per navigation, and Query re-runs its handler
-        // once per dependency that changes — four raw dependencies would
-        // re-fetch four times per navigation instead of once.
-        const combined = Store.combine(
-          [unit.outputs.opened, unit.outputs.params, unit.outputs.search, unit.outputs.provided],
-          (opened, params, search, provided) => ({ opened, params, search, provided }),
-        );
-        const gated = (deps: {
-          readonly opened: boolean;
-          readonly params: Option.Option<unknown>;
-          readonly search: Option.Option<unknown>;
-          readonly provided: Option.Option<unknown>;
-        }): Effect.Effect<A, E | "closed", Requires> =>
-          !deps.opened ||
-          Option.isNone(deps.params) ||
-          Option.isNone(deps.search) ||
-          Option.isNone(deps.provided)
-            ? Effect.fail("closed" as const)
-            : options.make({
-                // eslint-disable-next-line revizo/no-type-assertion
-                params: deps.params.value as never,
-                // eslint-disable-next-line revizo/no-type-assertion
-                search: deps.search.value as never,
-                // eslint-disable-next-line revizo/no-type-assertion
-                provided: deps.provided.value as never,
-              });
-        const query = yield* Query.make({
-          stores: { data: combined },
-          handler: ({ data }) => gated(data),
-        });
-        return { inputs: {}, outputs: {}, ui: { state: query.state, refresh: query.refresh } };
-      }),
-  }) as unknown as RouteBoundModel<Id, Group, RouteId, A, E>;
 
 const makeShape = <Group extends AnyRouteGroup>(
   routeGroup: Group,
@@ -1717,13 +1688,13 @@ const makeShape = <Group extends AnyRouteGroup>(
       matchRoute,
     };
 
-    const navigateEvent = yield* Event.make<
+    const navigateEvent = yield* Event.input<
       NavigateOptions<RouterController<Group>, RoutePath<RouterController<Group>>>
     >({ name: "router.navigate" }).pipe(Event.handler((payload) => navigate(payload as never)));
-    const addBlockerEvent = yield* Event.make<Blocker>({ name: "router.addBlocker" }).pipe(
+    const addBlockerEvent = yield* Event.input<Blocker>({ name: "router.addBlocker" }).pipe(
       Event.handler((blocker) => addBlocker(blocker)),
     );
-    const removeBlockerEvent = yield* Event.make<Blocker>({ name: "router.removeBlocker" }).pipe(
+    const removeBlockerEvent = yield* Event.input<Blocker>({ name: "router.removeBlocker" }).pipe(
       Event.handler((blocker) => removeBlocker(blocker)),
     );
 

@@ -52,6 +52,21 @@ inputs: {
 }
 ```
 
+Build an input's store/event with `Store.input()`/`Event.input()`, not
+`Store.make()`/`Event.make()`: the model gets back a read-only handle (it can
+`get`/`stream` its own input, never `set`/`emit` it) — only outside code,
+through the port, can drive it. Putting a full `Store.make()`/`Event.make()`
+result directly in `inputs` is a compile error for exactly that reason. An
+already-existing full store/event the model still legitimately uses with full
+capability elsewhere (say, a dependency's own event) goes through
+`Store.toInput()`/`Event.toInput()` instead — same value, narrowed view, just
+for this one port.
+
+```ts
+const query = Store.input("");
+const submit = yield* Event.input<void>().pipe(Event.handler(() => /* ... */));
+```
+
 `outputs` can be read or subscribed to, but not written. Put values here when
 parent models, tests, analytics, or persistence code may observe them.
 
@@ -101,7 +116,7 @@ export class CounterModel extends Model.Service<CounterModel>()(
   make: Effect.gen(function* () {
     const count = Store.make(0);
 
-    const increment = yield* Event.make<number>().pipe(
+    const increment = yield* Event.input<number>().pipe(
       Event.handler((amount) =>
         Store.update(count, (value) => value + amount),
       ),
@@ -223,7 +238,7 @@ export class ProjectPickerModel extends Model.Service<ProjectPickerModel>()(
     ]);
     const selectedProject = Store.make<ProjectId | null>(null);
 
-    const select = yield* Event.make<ProjectId>().pipe(
+    const select = yield* Event.input<ProjectId>().pipe(
       Event.handler((projectId) => Store.set(selectedProject, projectId)),
     );
 
@@ -333,7 +348,7 @@ export class TaskModel extends Model.Service<TaskModel>()(
     Effect.gen(function* () {
       const state = Store.make<TaskState>(initialTask(id));
 
-      const rename = yield* Event.make<string>().pipe(
+      const rename = yield* Event.input<string>().pipe(
         Event.handler((title) =>
           Store.update(state, (task) => ({
             ...task,
@@ -342,7 +357,7 @@ export class TaskModel extends Model.Service<TaskModel>()(
         ),
       );
 
-      const move = yield* Event.make<TaskStatus>().pipe(
+      const move = yield* Event.input<TaskStatus>().pipe(
         Event.handler((status) =>
           Store.update(state, (task) => ({ ...task, status })),
         ),
@@ -387,7 +402,7 @@ export class BoardModel extends Model.Service<BoardModel>()(
 
     let nextTaskId = 3;
 
-    const create = yield* Event.make<void>().pipe(
+    const create = yield* Event.input<void>().pipe(
       Event.handler(() =>
         Effect.gen(function* () {
           const title = (yield* Store.get(draft)).trim();
@@ -400,7 +415,7 @@ export class BoardModel extends Model.Service<BoardModel>()(
       ),
     );
 
-    const remove = yield* Event.make<string>().pipe(
+    const remove = yield* Event.input<string>().pipe(
       Event.handler((id) => tasks.remove({ id })),
     );
 

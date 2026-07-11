@@ -33,7 +33,7 @@ export class TodosModel extends Model.Service<TodosModel>()(
         }),
       );
 
-      const submit = yield* Event.make<void>().pipe(
+      const submit = yield* Event.input<void>().pipe(
         Event.handler(() =>
           Effect.gen(function* () {
             const title = (yield* Store.get(draft)).trim();
@@ -64,7 +64,7 @@ export class TodosModel extends Model.Service<TodosModel>()(
       );
 
       return {
-        inputs: { submit, refresh: todos.refresh },
+        inputs: { submit, refresh: Event.toInput(todos.refresh) },
         outputs: { todos: todos.state },
         ui: {
           todos: todos.state,

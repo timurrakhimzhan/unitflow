@@ -122,3 +122,46 @@ const readProvided = Effect.gen(function* () {
 Several guards on one route merge their Provides (`P1 & P2`). Inside a view
 map, the same data is available as `match.provided` on the guarded route's
 match.
+
+## Forwarding Provides Into a Page Model
+
+Reading `unit.outputs.provided` from inside a page model works, but it
+duplicates the `Option.isSome` check the guard already did — the model
+can't be open unless the guard already passed. `Router.makePages` closes
+this by name: declare an input with the same name as a field of the
+route's `Route.Output`, and it's forwarded automatically on every
+navigation — no `Option`, no manual wiring.
+
+```ts
+// NOT Option — makePages only ever writes here while "dashboard" is matched.
+// Store.input: the model reads `user`, never sets it — makePages is the
+// only writer, through the Sink the same name gets narrowed to in `inputs`.
+export class DashboardPageModel extends Model.Service<DashboardPageModel>()(
+  "docs/DashboardPage",
+)({
+  make: () =>
+    Effect.gen(function* () {
+      const user = Store.input("");
+      return { inputs: { user }, outputs: {}, ui: { user } };
+    }),
+}) {}
+
+// a name (`user`) that names a field of BOTH the model's inputs and the
+// route's Route.Output gets forwarded automatically on every navigation —
+// no manual wiring. A disagreeing type at that name is a compile error.
+export const adminPages = Router.makePages(AdminRouter.model, { dashboard: DashboardPageModel });
+```
+
+`Store.input` hands the model a read-only `Source`: the page model itself
+can `Store.get`/`Store.stream` its own `user`, but calling `Store.set` on it
+inside its own `make` fails to compile — only external code (`makePages`'s
+forwarding here) can write it, through the `Sink` the same store is
+narrowed to once placed in `inputs`.
+
+The match is by name only, not position: a model that doesn't declare a
+matching input simply never receives anything, and a name present on both
+sides with disagreeing types fails to compile — `Router.makePages`
+(and [`RouterView.make`](/router/react/), which calls it internally)
+checks every page model against its route's `Route.Output` before anything
+runs. This is also how a future loader would plug in: as a middleware that
+provides the fetched data, forwarded into the page model the same way.

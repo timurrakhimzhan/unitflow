@@ -34,7 +34,7 @@ class TtlModel extends Model.Service<TtlModel>()(
 
       return {
         inputs: {
-          setCount: Event.setter(count),
+          setCount: Event.toInput(Event.setter(count)),
         },
         outputs: {
           count,

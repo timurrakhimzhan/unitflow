@@ -26,7 +26,7 @@ the previous value available through `AsyncResult.value(...)`.
 
 ```ts
 import * as Effect from "effect/Effect";
-import { Model, Query } from "@unitflow/core";
+import { Event, Model, Query } from "@unitflow/core";
 
 interface Project {
   readonly id: string;
@@ -45,7 +45,7 @@ export class ProjectsModel extends Model.Service<ProjectsModel>()(
 
     return {
       inputs: {
-        refresh: projects.refresh,
+        refresh: Event.toInput(projects.refresh),
       },
       outputs: {
         projects: projects.state,
@@ -60,7 +60,11 @@ export class ProjectsModel extends Model.Service<ProjectsModel>()(
 ```
 
 Expose `query.state` when a parent, test, or View should observe loading,
-failure, and value. Expose `query.refresh` when something may reload it.
+failure, and value. Expose `query.refresh` when something may reload it — in
+`inputs`, through `Event.toInput(query.refresh)`: the query's own
+construction already emits it internally (the eager first load), so it can't
+be narrowed with `Event.input()`; `toInput` says "yes, an existing
+full-capability event, on purpose."
 
 ## Dependency Stores
 
@@ -190,7 +194,10 @@ const products = yield* Query.makeInfinite({
 });
 
 return {
-  inputs: { reload: products.refresh, loadMore: products.loadMore },
+  inputs: {
+    reload: Event.toInput(products.refresh),
+    loadMore: Event.toInput(products.loadMore),
+  },
   outputs: { products: products.state },
   ui: {
     products: products.state,

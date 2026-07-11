@@ -11,13 +11,23 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { Event, InstanceScope, Model, Registry, Store } from "../src/index.js";
 
+class InputPortModel extends Model.Service<InputPortModel>()(
+  "/test/test/InputPortModel",
+)({
+  make: () =>
+    Effect.gen(function* () {
+      const user = Store.input("");
+      return { inputs: { user }, outputs: {}, ui: { user } };
+    }),
+}) {}
+
 class CounterModel extends Model.Service<CounterModel>()(
   "/test/test/CounterModel",
 )({
   make: () =>
     Effect.gen(function* () {
       const countStore = Store.make(0);
-      const incrementEvent = Event.make<number>();
+      const incrementEvent = Event.input<number>();
 
       yield* Registry.run(
         Event.stream(incrementEvent).pipe(
@@ -45,7 +55,7 @@ class AuditedCounterModel extends Model.Service<AuditedCounterModel>()(
   make: () =>
     Effect.gen(function* () {
       const countStore = Store.make(0);
-      const incrementEvent = Event.make<number>();
+      const incrementEvent = Event.input<number>();
       const incrementRecorded = Event.make<number>();
       const totalStore = Store.make(0);
 
@@ -86,7 +96,7 @@ class RenderModel extends Model.Service<RenderModel>()(
   make: (key) =>
     Effect.gen(function* () {
       const labelStore = Store.make(`render:${key.id}`);
-      const renameEvent = Event.make<string>();
+      const renameEvent = Event.input<string>();
 
       yield* Registry.run(
         Event.stream(renameEvent).pipe(Stream.tap((label) => Store.set(labelStore, label))),
@@ -195,8 +205,8 @@ class TwoPipelinesModel extends Model.Service<TwoPipelinesModel>()(
   make: () =>
     Effect.gen(function* () {
       const countStore = Store.make(0);
-      const incrementEvent = Event.make<number>();
-      const explodeEvent = Event.make();
+      const incrementEvent = Event.input<number>();
+      const explodeEvent = Event.input();
 
       yield* Registry.run(
         Event.stream(explodeEvent).pipe(Stream.mapEffect(() => Effect.die("pipeline bug"))),
@@ -229,8 +239,8 @@ class SnapshotModel extends Model.Service<SnapshotModel>()(
     Effect.gen(function* () {
       const countStore = Store.make(0);
       const snapshotStore = Store.make(-1);
-      const setCountEvent = Event.make<number>();
-      const snapshotEvent = Event.make();
+      const setCountEvent = Event.input<number>();
+      const snapshotEvent = Event.input();
 
       yield* Registry.run(
         Event.stream(setCountEvent).pipe(Stream.tap((count) => Store.set(countStore, count))),
@@ -318,7 +328,7 @@ class ItemModel extends Model.Service<ItemModel>()(
 
       return {
         inputs: {
-          setCount: Event.setter(count),
+          setCount: Event.toInput(Event.setter(count)),
         },
         outputs: {
           count,
@@ -433,7 +443,7 @@ class HeadlessModel extends Model.Service<HeadlessModel>()(
   make: () =>
     Effect.gen(function* () {
       const total = Store.make(0);
-      const add = yield* Event.make<number>().pipe(
+      const add = yield* Event.input<number>().pipe(
         Event.handler((amount) => Store.update(total, (value) => value + amount)),
       );
 
@@ -951,6 +961,42 @@ describe("Unitflow", () => {
     assert.isDefined(sinkAsUi);
     assert.isDefined(dataAsOutput);
   });
+
+  it("Store.input is read-only for the owning model, write-only for everyone else (type-level)", () => {
+    const user = Store.input("");
+    // @ts-expect-error the owning model can only read its own input, never set it
+    const invalidSelfSet = Store.set(user, "ada");
+    const validSelfRead = Store.get(user);
+
+    const valid: Model.Shape = { inputs: { user }, outputs: {}, ui: { user } };
+
+    // a Combined store still isn't a valid input — it has nothing backing a
+    // `set`, unlike a genuine Store.input().
+    const combined = Store.combine([user], (value) => value.length);
+    // @ts-expect-error a combined store is read-only and not a Store.input()
+    const combinedAsInput: Model.Shape = { inputs: { combined }, outputs: {}, ui: {} };
+
+    const check = (ports: Model.PortsOf<typeof InputPortModel>) => {
+      // @ts-expect-error inputs are write-only externally — `get` needs a Source
+      const invalidExternalGet = Store.get(ports.inputs.user);
+      const validExternalSet = Store.set(ports.inputs.user, "ada");
+      return { invalidExternalGet, validExternalSet };
+    };
+
+    return { invalidSelfSet, validSelfRead, valid, combined, combinedAsInput, check };
+  });
+
+  it.effect("Store.input forwards from outside into the owning model's own read", () =>
+    Effect.gen(function* () {
+      const ports = yield* Model.get(InputPortModel);
+
+      assert.strictEqual(yield* Store.get(ports.ui.user), "");
+
+      yield* Store.set(ports.inputs.user, "ada");
+
+      assert.strictEqual(yield* Store.get(ports.ui.user), "ada");
+    }).pipe(Effect.provide(InputPortModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
+  );
 
   it.effect("exposes extra sections to resolvers as observation surfaces", () =>
     Effect.gen(function* () {

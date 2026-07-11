@@ -131,6 +131,39 @@ This is the simple way to subscribe to store changes inside a model. Reach for
 raw `Store.stream(...)` only when you need stream operators such as debounce,
 merge, throttle, or schedules.
 
+## Forward Into Another Store or Event
+
+Use `Store.forwardTo(sink)` to keep another model's input port in sync with a
+store, without hand-rolling `Store.stream(...).pipe(Stream.mapEffect(...))`.
+The target is the CHILD's already-narrowed `Sink` — reached through
+`Model.get`, never the child's own local `Store.input()` value (that one
+stays read-only, on purpose — see [Model](./model.mdx)).
+
+```ts
+import { Model, Store } from "@unitflow/core";
+import { ChildModel } from "./child-model";
+
+const selection = Store.make<string | null>(null);
+const child = yield* Model.get(ChildModel);
+
+yield* selection.pipe(Store.forwardTo(child.inputs.selection));
+```
+
+It is pipeable and data-last, and forks into the enclosing model's scope like
+`Registry.run` — set it up once during `make`, it runs for the model's whole
+lifetime. It also accepts anything that resolves to a store, so it chains
+directly off a combinator like `Store.persist(...)`:
+
+```ts
+yield* Store.make<LanguageFilter>("all").pipe(
+  Store.persist({ key: "language", schema: LanguageSchema }),
+  Store.forwardTo(child.inputs.language),
+);
+```
+
+`Event.forwardTo(sink)` is the event-shaped twin — see
+[Forward Into Another Event](./events.md#forward-into-another-event).
+
 ## Awaiting Store Values
 
 Use `Store.waitFor(store, predicate)` when an Effect needs to block until a

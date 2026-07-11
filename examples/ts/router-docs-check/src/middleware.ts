@@ -63,3 +63,25 @@ const readProvided = Effect.gen(function* () {
 });
 void readProvided;
 // #endregion provided
+
+// #region forward
+const { makePages } = Router;
+
+// NOT Option — makePages only ever writes here while "dashboard" is matched.
+// Store.input: the model reads `user`, never sets it — makePages is the
+// only writer, through the Sink the same name gets narrowed to in `inputs`.
+export class DashboardPageModel extends Model.Service<DashboardPageModel>()(
+  "docs/DashboardPage",
+)({
+  make: () =>
+    Effect.gen(function* () {
+      const user = Store.input("");
+      return { inputs: { user }, outputs: {}, ui: { user } };
+    }),
+}) {}
+
+// a name (`user`) that names a field of BOTH the model's inputs and the
+// route's Route.Output gets forwarded automatically on every navigation —
+// no manual wiring. A disagreeing type at that name is a compile error.
+export const adminPages = makePages(AdminRouter.model, { dashboard: DashboardPageModel });
+// #endregion forward

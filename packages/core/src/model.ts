@@ -36,14 +36,16 @@ export interface UnitPorts {
 }
 
 /**
- * What a model's `make` must return at minimum: `inputs` hold only
- * sink-capable ports, `outputs` only source-capable ones (a full `Event`
- * qualifies — it is both, and the `ui` narrowing turns it into a `Sink` for
- * the View to fire). A bare `Sink` cannot be republished in `outputs`, and a
- * source-only port (e.g. a combined store) cannot be an input. `ui`
- * additionally accepts event sinks (a mutation's `run` is typed sink-only):
- * the View fires them exactly like events. Store sinks stay rejected
- * everywhere but `inputs`.
+ * What a model's `make` must return at minimum: `inputs` hold sink-capable
+ * ports, or a `Store.Source` from {@link Store.input} — the owning model
+ * gets read-only access to its own input (`get`/`stream`, never `set`); the
+ * `Ports` narrowing below still hands everyone else a `Sink` for it, same
+ * as a full `Store`. `outputs` hold only source-capable ports (a full
+ * `Event` qualifies — it is both, and the `ui` narrowing turns it into a
+ * `Sink` for the View to fire). A bare `Sink` cannot be republished in
+ * `outputs`. `ui` additionally accepts event sinks (a mutation's `run` is
+ * typed sink-only): the View fires them exactly like events. Store sinks
+ * stay rejected everywhere but `inputs`.
  *
  * `ui` is optional: a headless model — a service other models resolve — has
  * no View surface and returns only `inputs`/`outputs`. `View.make` requires a
@@ -56,7 +58,7 @@ export interface UnitPorts {
  * View — only other models resolving the unit see them.
  */
 export interface Shape {
-  readonly inputs: Record<string, SinkPort>;
+  readonly inputs: Record<string, SinkPort | Store.InputSource<any> | Event.InputSource<any>>;
   readonly outputs: Record<string, SourcePort>;
   readonly ui?: Record<string, SourcePort | Event.Sink<any> | UnitPorts>;
 }
@@ -69,16 +71,43 @@ export interface Shape {
 type Section<K> = Record<
   string,
   K extends "inputs"
-    ? SinkPort
+    ? SinkPort | Store.InputSource<any> | Event.InputSource<any>
     : K extends "ui"
       ? SourcePort | Event.Sink<any> | UnitPorts
       : SourcePort
 >;
 
+/** An input port that also has the OTHER capability (`~source` AND `~sink`
+ * both present — a full `Store.make()`/`Event.make()`, or an existing
+ * full store/event like `Query.refresh` or an `Event.setter` handed in
+ * as-is): the owning model, still holding that same full-capability value
+ * in its own `make` closure, could `set`/`emit` its own input. Swapped for
+ * an `ERROR` marker so the literal the model returned stops satisfying
+ * `ValidatedShape`'s constraint — caught at `make`'s own return type, not
+ * just a `Model.Shape` annotation. One rule, one escape hatch: a value
+ * constructed fresh uses `Store.input()`/`Event.input()`; an EXISTING full
+ * store/event (the model didn't create it, or legitimately still uses it
+ * elsewhere with full capability) is narrowed explicitly at the call site
+ * via `Store.toInput()`/`Event.toInput()` — never a silent exemption. */
+type ValidatedInputs<Inputs> = {
+  readonly [K in keyof Inputs]: Inputs[K] extends {
+    readonly "~source": true;
+    readonly "~sink": true;
+  }
+    ? {
+        readonly ERROR: `input "${K & string}" is a full Store/Event — use Store.input()/Event.input(), or Store.toInput()/Event.toInput() for an existing one, so the model can't set its own input`;
+      }
+    : Inputs[K];
+};
+
 /** Holds EVERY section of a make-return shape — extras included — to its
  * {@link Section} rule; {@link Shape} (the `make` constraint proper) keeps
- * the three base sections required. */
-type Sections<A> = { readonly [K in keyof A]: Section<K> };
+ * the three base sections required. `inputs` alone gets the stricter
+ * {@link ValidatedInputs} per-field check — `outputs`/`ui`/extra sections
+ * stay on the general {@link Section} membership rule. */
+type Sections<A> = {
+  readonly [K in keyof A]: K extends "inputs" ? ValidatedInputs<A[K]> : Section<K>;
+};
 
 export interface Accessor<Key, A extends Shape, E> {
   readonly get: (...args: KeyArgs<Key>) => Effect.Effect<A, E>;
@@ -305,9 +334,13 @@ export type ServicesOf<M extends AnyService> = ReturnType<M["modelType"]["servic
 type NarrowInput<T> =
   T extends Store.Store<infer A>
     ? Store.Sink<A>
-    : T extends Event.Event<infer A>
-      ? Event.Sink<A>
-      : T;
+    : T extends Store.InputSource<infer A>
+      ? Store.Sink<A>
+      : T extends Event.Event<infer A>
+        ? Event.Sink<A>
+        : T extends Event.InputSource<infer A>
+          ? Event.Sink<A>
+          : T;
 
 type NarrowOutput<T> =
   T extends Store.Store<infer A>
@@ -321,7 +354,9 @@ type NarrowUi<T> =
     ? Store.Source<A>
     : T extends Event.Event<infer A>
       ? Event.Sink<A>
-      : T;
+      : T extends Event.InputSource<infer A>
+        ? Event.Sink<A>
+        : T;
 
 /**
  * What everyone but the owning model sees: `inputs` are write-only sinks,

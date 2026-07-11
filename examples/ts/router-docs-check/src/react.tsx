@@ -114,3 +114,29 @@ createRoot(document.getElementById("root") as HTMLElement).render(
 // #endregion mount
 
 void UserRoute;
+
+// #region validate-negative
+// Not a doc snippet — a regression check: RouterView.make must reject a
+// page model whose input disagrees with its route's Route.Output, the same
+// way a direct makePages(...) call already does.
+import * as Effect from "effect/Effect";
+import { Model, Store } from "@unitflow/core";
+import { AdminRouter } from "./middleware";
+
+class BadDashboardPageModel extends Model.Service<BadDashboardPageModel>()(
+  "docs/BadDashboardPage",
+)({
+  make: () =>
+    Effect.gen(function* () {
+      const user = Store.input(0); // number, but Route.Output's user is a string
+      return { inputs: { user }, outputs: {}, ui: { user } };
+    }),
+}) {}
+
+export const BadAdminView = RouterView.make(AdminRouter.model, {
+  routes: {
+    // @ts-expect-error inputs.user: number disagrees with Route.Output's user: string
+    dashboard: BadDashboardPageModel,
+  },
+});
+// #endregion validate-negative

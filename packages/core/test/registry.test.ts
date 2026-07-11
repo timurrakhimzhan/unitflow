@@ -10,7 +10,7 @@ class CascadeModel extends Model.Service<CascadeModel>()(
 )({
   make: () =>
     Effect.gen(function* () {
-      const first = Event.make<number>();
+      const first = Event.input<number>();
       const second = Event.make<number>();
       const third = Event.make<number>();
       const result = Store.make(0);

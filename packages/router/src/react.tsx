@@ -156,6 +156,41 @@ export type RouterViewComponent<M extends Router.AnyRouter, Units> = React.FC<
   >;
 };
 
+/** The model bound to a single tree node, if any — a bare `RouteComponent`
+ * function (no `.model`) or a node with no `view` contributes nothing. */
+type NodeModel<Node> = Node extends { readonly model: infer Mdl }
+  ? Mdl
+  : Node extends { readonly view: infer View }
+    ? View extends { readonly model: infer Mdl }
+      ? Mdl
+      : never
+    : never;
+
+/** In-place validation of a (possibly nested) routes config's TYPE against
+ * the router's own declared routes: every node's page model is checked,
+ * by name, against ITS route's `Route.Output` — same rule `makePages`
+ * enforces directly (see `Router.ValidatePageMap`), just walked over the
+ * tree shape `RouterView.make`'s `routes` config actually has instead of a
+ * flat `PageMap`. A mismatched node is swapped for an `ERROR` marker that
+ * cannot structurally match the literal the caller passed in, so a bad
+ * `RouterView.make({ routes: {...} })` call fails to compile at the call
+ * site — this is what makes leasing `Router.makePages` internally with a
+ * plain runtime-built map (below) safe: the public entry point already
+ * rejected anything that map could disagree with. */
+type ValidateRoutesConfig<M extends Router.AnyRouter, Units, Config> = {
+  readonly [Id in keyof Config]: Id extends Router.RouteIds<Router.RouterGroupOf<M>>
+    ? [Router.MismatchedInputs<RouteById<M, Id>, NodeModel<Config[Id]>>] extends [never]
+      ? Config[Id] extends { readonly routes?: infer Nested }
+        ? Nested extends Record<string, unknown>
+          ? Config[Id] & { readonly routes?: ValidateRoutesConfig<M, Units, Nested> }
+          : Config[Id]
+        : Config[Id]
+      : {
+          readonly ERROR: `inputs disagree with route "${Id & string}"'s Route.Output on: ${Router.MismatchedInputs<RouteById<M, Id>, NodeModel<Config[Id]>> & string}`;
+        }
+    : Config[Id];
+};
+
 /** Walks the (possibly nested) routes config collecting every route id's
  * page model, wherever in the tree it's declared — a `{ view, routes }`
  * node's own `view` counts just like a top-level shorthand entry does. */
@@ -179,12 +214,19 @@ const collectPageModels = (
   }
 };
 
-const makeRouterView = <M extends Router.AnyRouter, Units = void>(
+const makeRouterView = <
+  M extends Router.AnyRouter,
+  Units = void,
+  const Views extends RouterViews<M, Units> = RouterViews<M, Units>,
+>(
   router: M,
-  views: RouterViews<M, Units>,
+  views: Views & { readonly routes: ValidateRoutesConfig<M, Units, Views["routes"]> },
 ): RouterViewComponent<M, Units> => {
   // Stitch: pull the models out of the views map and let the router build
-  // its pages model around them.
+  // its pages model around them. `views.routes` was already checked, model
+  // by model, against the router's own `Route.Output`s above — a call that
+  // disagreed never compiles, so this runtime-built map is safe to hand to
+  // `makePages` opaquely; nothing left to re-verify here.
   const pageModels: Record<string, Model.AnyService> = {};
   collectPageModels(views.routes as Readonly<Record<string, unknown>>, pageModels);
   const pagesModel = Router.makePages(router, pageModels as never);

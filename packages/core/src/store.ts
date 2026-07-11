@@ -80,6 +80,40 @@ export const make = <A>(initial: A, options?: Options): Store<A> => ({
 export const isStore = (value: unknown): value is Store<unknown> =>
   typeof value === "object" && value !== null && TypeId in value;
 
+const InputTypeId = Symbol.for("@unitflow/core/Store/Input");
+
+/** A `Store.input()` result — distinguished from a plain `Source` (e.g. a
+ * `Combined` store) so `Model.Shape`'s `inputs` section can allow this one
+ * specifically without also opening the door to a read-only computed store
+ * that has nothing underneath for `set` to write to. */
+export interface InputSource<A> extends Source<A> {
+  readonly [InputTypeId]: typeof InputTypeId;
+}
+
+/**
+ * A store meant to sit in a model's `inputs`, typed as its `Source`: the
+ * owning model can only read it (`get`/`stream`) — never `set` it on
+ * itself. `Model.Shape`'s `inputs` section narrows the SAME descriptor to
+ * `Sink` for everyone else (`Model.get`, `Router.makePages`, a View), the
+ * same way it already narrows a model's `outputs`/`ui` down to `Source`.
+ * Runtime-identical to {@link make} plus one marker — `get`/`set` resolve
+ * by `id` alone, never by the `~source`/`~sink`/input markers, so this is a
+ * type-only split, not a second store. */
+export const input = <A>(initial: A, options?: Options): InputSource<A> => ({
+  ...make(initial, options),
+  [InputTypeId]: InputTypeId,
+});
+
+/** Narrows an EXISTING full store (not one this `make` is constructing
+ * fresh) to its `Source` view, for placement in `inputs` — e.g. a
+ * dependency's own store the model is re-exposing as its input, where
+ * `Store.input()` doesn't apply because the model didn't create it. Same
+ * object, same id — a type-only view, not a copy. */
+export const toInput = <A>(store: Store<A>): InputSource<A> => ({
+  ...store,
+  [InputTypeId]: InputTypeId,
+});
+
 const CombinedTypeId = Symbol.for("@unitflow/core/CombinedStore");
 
 interface CombinedState<A> {
@@ -674,6 +708,33 @@ export const stream = <A>(store: Source<A>): Stream.Stream<A, never, Registry> =
     );
   }
   return storeStream(store);
+};
+
+type ForwardInput<A> = Source<A> | Effect.Effect<Source<A>, any, any>;
+
+type ForwardResult<A, Input extends ForwardInput<A>> =
+  Input extends Effect.Effect<infer E extends Source<A>, infer EffE, infer EffR>
+    ? Effect.Effect<E, EffE, EffR | Registry>
+    : Input extends Source<A>
+      ? Effect.Effect<Input, never, Registry>
+      : never;
+
+/** Subscribes to `source` and writes every emission into `sink` — forked
+ * into the enclosing model's scope, same lifetime as `Registry.run`.
+ * Data-last, and accepts either a plain source or something that resolves
+ * to one, e.g. `store.pipe(Store.persist(...), Store.forwardTo(sink))`.
+ * Resolves to the source, so the pipe can keep going. */
+export const forwardTo = <A>(sink: Sink<A>) => {
+  const attach = (
+    sourceOrEffect: Source<A> | Effect.Effect<Source<A>, unknown, unknown>,
+  ): Effect.Effect<Source<A>, unknown, unknown> =>
+    Effect.isEffect(sourceOrEffect)
+      ? Effect.flatMap(sourceOrEffect, attach)
+      : Effect.as(
+          Registry.run(stream(sourceOrEffect).pipe(Stream.mapEffect((value) => set(sink, value)))),
+          sourceOrEffect,
+        );
+  return attach as <Input extends ForwardInput<A>>(source: Input) => ForwardResult<A, Input>;
 };
 
 const watchSources = (source: Source<any>): ReadonlyArray<Source<any>> =>

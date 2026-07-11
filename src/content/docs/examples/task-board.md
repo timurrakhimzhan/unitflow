@@ -44,7 +44,7 @@ export class TaskModel extends Model.Service<TaskModel>()(
         name: `task:${id}`,
       });
 
-      const rename = yield* Event.make<string>().pipe(
+      const rename = yield* Event.input<string>().pipe(
         Event.handler((title) =>
           Store.update(state, (task) => ({
             ...task,
@@ -53,13 +53,13 @@ export class TaskModel extends Model.Service<TaskModel>()(
         ),
       );
 
-      const move = yield* Event.make<TaskStatus>().pipe(
+      const move = yield* Event.input<TaskStatus>().pipe(
         Event.handler((status) =>
           Store.update(state, (task) => ({ ...task, status })),
         ),
       );
 
-      const assign = yield* Event.make<string>().pipe(
+      const assign = yield* Event.input<string>().pipe(
         Event.handler((assignee) =>
           Store.update(state, (task) => ({
             ...task,
@@ -68,7 +68,7 @@ export class TaskModel extends Model.Service<TaskModel>()(
         ),
       );
 
-      const toggleBlocked = yield* Event.make<void>().pipe(
+      const toggleBlocked = yield* Event.input<void>().pipe(
         Event.handler(() =>
           Store.update(state, (task) => ({
             ...task,

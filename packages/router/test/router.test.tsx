@@ -846,65 +846,77 @@ describe("@unitflow/router", () => {
     assert.isDefined(match);
   });
 
-  it.effect("makeModel gates on the route being open and reacts to param changes", () => {
-    const ItemRoute = Route.make("item", {
-      path: "/items/:id",
-      params: Schema.Struct({ id: Schema.NumberFromString }),
-    });
-    const OtherRoute = Route.make("other", { path: "/other" });
+  it.effect("makePages forwards a route's Output into a page model's matching input", () => {
+    class ForwardGuard extends Router.Middleware<ForwardGuard>()(
+      "/test/router/forward/Guard",
+    )<{ readonly user: string }>() {}
+    const AdminRoute3 = Route.make("admin3", { path: "/admin3" });
     const { model, routeModel } = Router.make(
-      `/test/router/make-model/${++nextRouter}`,
-      Route.group(ItemRoute, OtherRoute),
+      `/test/router/forward/${++nextRouter}`,
+      Route.group(AdminRoute3).middleware(ForwardGuard),
     );
 
-    const calls: Array<number> = [];
-    // no Option.isNone anywhere — params arrive unwrapped, decoded
-    const ItemPageModel = Route.makeModel(routeModel, "item", {
-      make: ({ params }) =>
-        Effect.sync(() => {
-          calls.push(params.id);
-          return { id: params.id };
+    // NOT Option — makePages only ever writes here while "admin3" is matched.
+    class AdminPageModel extends Model.Service<AdminPageModel>()(
+      "/test/router/forward/AdminPage",
+    )({
+      make: () =>
+        Effect.gen(function* () {
+          const user = Store.input("");
+          return { inputs: { user }, outputs: {}, ui: { user } };
         }),
-    });
+    }) {}
 
-    const testLayer = ItemPageModel.layer.pipe(
+    const pages = makePages(model, { admin3: AdminPageModel });
+
+    const guardLayer = ForwardGuard.layer(() => Effect.succeed({ user: "trinity" }));
+    const testLayer = pages.layer.pipe(
+      Layer.provideMerge(AdminPageModel.layer),
       Layer.provideMerge(routeModel.layer),
       Layer.provideMerge(model.layer),
+      Layer.provideMerge(guardLayer),
       Layer.provideMerge(testEnv()),
     );
 
     return Effect.gen(function* () {
       const router = yield* Model.get(model);
-      const page = yield* Model.get(ItemPageModel);
+      const page = yield* Model.get(AdminPageModel);
+      // leases PagesModel itself — its `make` is what wires the forwarding
+      yield* Model.get(pages);
 
-      // closed before navigating: no route open, nothing fetched yet
-      assert.strictEqual((yield* Store.get(page.ui.state))._tag, "Failure");
-      assert.deepStrictEqual(calls, []);
+      assert.strictEqual(yield* Store.get(page.ui.user), "");
 
-      yield* Registry.allSettled(
-        Event.emit(router.inputs.navigate, { to: "/items/:id", params: { id: 1 } }),
-      );
-      yield* Store.waitFor(page.ui.state, (result) => result._tag === "Success");
-      assert.deepStrictEqual(calls, [1]);
-      const first = yield* Store.get(page.ui.state);
-      assert.strictEqual(first._tag, "Success");
-      if (first._tag === "Success") assert.deepStrictEqual(first.value, { id: 1 });
+      yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/admin3" }));
+      yield* Store.waitFor(page.ui.user, (user) => user === "trinity");
 
-      // navigating to a different id re-runs make with the fresh param
-      yield* Registry.allSettled(
-        Event.emit(router.inputs.navigate, { to: "/items/:id", params: { id: 2 } }),
-      );
-      yield* Store.waitFor(page.ui.state, (result) =>
-        result._tag === "Success" && result.value.id === 2,
-      );
-      assert.deepStrictEqual(calls, [1, 2]);
-
-      // leaving the route fails the query into "closed", not a stale value
-      yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/other" }));
-      yield* Store.waitFor(page.ui.state, (result) => result._tag === "Failure");
-      const closed = yield* Store.get(page.ui.state);
-      assert.strictEqual(closed._tag, "Failure");
-      assert.deepStrictEqual(calls, [1, 2]);
+      assert.strictEqual(yield* Store.get(page.ui.user), "trinity");
     }).pipe(Effect.provide(testLayer));
+  });
+
+  it("rejects a page model whose input disagrees with its route's Output", () => {
+    class TypedGuard extends Router.Middleware<TypedGuard>()(
+      "/test/router/mismatch/Guard",
+    )<{ readonly user: string }>() {}
+    const AdminRoute4 = Route.make("admin4", { path: "/admin4" });
+    const { model } = Router.make(
+      `/test/router/mismatch/${++nextRouter}`,
+      Route.group(AdminRoute4).middleware(TypedGuard),
+    );
+
+    class BadPageModel extends Model.Service<BadPageModel>()(
+      "/test/router/mismatch/BadPage",
+    )({
+      make: () =>
+        Effect.gen(function* () {
+          const user = Store.input(0); // number, but Output.user is a string
+          return { inputs: { user }, outputs: {}, ui: { user } };
+        }),
+    }) {}
+
+    if (false) {
+      // @ts-expect-error inputs.user: number disagrees with Route.Output's user: string
+      makePages(model, { admin4: BadPageModel });
+    }
+    assert.isTrue(true);
   });
 });

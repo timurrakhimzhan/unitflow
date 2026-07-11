@@ -25,7 +25,10 @@ export interface Query<
   /** The full store: the owning model may override it manually
    * (`Store.set(query.state, ...)`). */
   readonly state: Store.Store<AsyncResult.AsyncResult<A, E>>;
-  /** Emitting reloads. Expose it directly as an input/ui port. */
+  /** Emitting reloads. Safe to expose as a `ui` port directly; as an
+   * `inputs` port, go through `Event.toInput(query.refresh)` — the query's
+   * own construction (and the owning model, freely) still emits this exact
+   * event elsewhere, so it can't be narrowed to `Event.input()`. */
   readonly refresh: Event.Event<void>;
   /** The declared dependency stores: combinators read fresh values here. */
   readonly stores: Deps;

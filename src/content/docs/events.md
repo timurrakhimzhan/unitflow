@@ -106,6 +106,37 @@ const submit = yield* Event.make<ProjectDraft>().pipe(
 Expose `submit` when outside code may start the save. Expose `saved` when
 outside code may observe successful saves.
 
+## Forward Into Another Event
+
+Use `Event.forwardTo(sink)` to relay every occurrence of one event into
+another model's input port, without hand-rolling
+`Event.stream(...).pipe(Stream.mapEffect(...))`. The target is the CHILD's
+already-narrowed `Sink` — reached through `Model.get`, never the child's own
+local `Event.input()` value (that one stays read-only, on purpose — see
+[Model](./model.mdx)).
+
+```ts
+import { Model } from "@unitflow/core";
+import { ChildModel } from "./child-model";
+
+const saved = Event.make<Project>();
+const child = yield* Model.get(ChildModel);
+
+yield* saved.pipe(Event.forwardTo(child.inputs.projectSaved));
+```
+
+It is pipeable and data-last, and forks into the enclosing model's scope like
+`Registry.run` — set it up once during `make`, it runs for the model's whole
+lifetime. It also accepts anything that resolves to an event, so it chains
+directly off `Store.changed`:
+
+```ts
+yield* selectedProject.pipe(Store.changed, Event.forwardTo(child.inputs.selectionChanged));
+```
+
+`Store.forwardTo(sink)` is the store-shaped twin — see
+[Forward Into Another Store or Event](./store.md#forward-into-another-store-or-event).
+
 ## Combine
 
 `Event.combine` merges several events into one observable event.
