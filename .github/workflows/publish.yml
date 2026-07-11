@@ -1,0 +1,47 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/core/package.json"
+      - "packages/react/package.json"
+      - "packages/router/package.json"
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing (OIDC) — no NPM_TOKEN secret needed
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+
+      # Trusted publishing needs a recent npm CLI — Node 22's bundled npm
+      # may be older than what `npm trust`/OIDC publish requires.
+      - run: npm install -g npm@latest
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm packages:build
+
+      - run: pnpm packages:test
+
+      # Publishes whichever of core/react/router have a package.json version
+      # not yet live on npm — in dependency order (core, then react, then
+      # router), so a dependent's resolved "@unitflow/core": "^x.y.z" range
+      # is already installable by the time it's published. Each package's
+      # Trusted Publisher is already configured (npm trust github ...),
+      # pointing at this exact workflow file.
+      - run: pnpm publish:changed

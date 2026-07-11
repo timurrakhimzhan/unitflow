@@ -1,6 +1,6 @@
 {
   "name": "@unitflow/core",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "type": "module",
   "description": "Effect-native scoped UI state manager core.",
   "license": "MIT",

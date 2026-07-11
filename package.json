@@ -15,6 +15,7 @@
     "docs:check": "node scripts/check-docs.mjs && pnpm astro:check && pnpm build",
     "skill:validate": "python3 ${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-creator/scripts/quick_validate.py skills/unitflow-modeling",
     "check": "pnpm packages:build && pnpm packages:test && pnpm examples:build && pnpm docs:check && pnpm skill:validate",
+    "publish:changed": "node scripts/publish-changed.mjs",
     "e2e": "playwright test -c e2e"
   },
   "dependencies": {
