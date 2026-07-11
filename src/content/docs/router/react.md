@@ -82,6 +82,49 @@ route never renders inside it just because it also starts with `/`. A route
 only receives another's rendered output as `children` when the route table
 says so explicitly — see the next section.
 
+## Route-Fed Page Views
+
+A third kind of entry: `routeView(Model, render)`, for a page model KEYED
+by its own route's `Route.Output` (see [Router: Middleware](/router/middleware/#getting-provides-into-a-page-model)).
+Where a plain `View.make` page expects its unit already resolved, a
+`routeView` leases its model itself — lazily, the moment the route first
+matches, with the guard's Provides as the key. `make()` gets real, typed
+data on its very first line: no placeholder, no `Option`, no race with a
+`Query` dependency at construction.
+
+```tsx
+import { routeView } from "@unitflow/router/react";
+
+// Keyed by the route's own Output — no placeholder, no Option, real data
+// on the very first line of make(), for a value the model needs
+// immediately (e.g. as a Query dependency), not just to re-expose later.
+export class DashboardRouteViewModel extends Model.Service<DashboardRouteViewModel>()(
+  "docs/DashboardRouteView",
+)<{ readonly user: string }>()({
+  make: ({ user }) =>
+    Effect.gen(function* () {
+      const greeting = Store.make(`Hello, ${user}`);
+      return { inputs: {}, outputs: {}, ui: { greeting } };
+    }),
+}) {}
+
+const DashboardRouteView = routeView(DashboardRouteViewModel, ({ greeting }) => <p>{greeting}</p>);
+
+// routeView entries skip the eager page-model machinery entirely — the
+// router leases the model itself, lazily, the moment "dashboard" matches.
+export const AdminRouteViewApp = RouterView.make(AdminRouter.model, {
+  routes: { dashboard: DashboardRouteView },
+});
+```
+
+`routeView` is a thin wrapper over `@unitflow/react`'s `View.make` itself —
+any [keyed model](/model/#keys) can lease itself the same way from a plain
+View, not just route-fed ones; see
+[Lease a Model Directly](/react/#lease-a-model-directly). The key must
+match the route's `Route.Output` exactly — a model keyed by the wrong
+type, wired into the wrong route id, fails to compile at the
+`RouterView.make({ routes: {...} })` call site.
+
 ## Nesting the Views Map
 
 A route's view nests the same way its declaration does: a `{ view, routes }`

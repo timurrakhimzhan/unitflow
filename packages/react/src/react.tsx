@@ -166,10 +166,51 @@ export const useBoundUi = <Ui extends Record<string, unknown>>(ui: Ui): BoundUi<
   return units as BoundUi<Ui>;
 };
 
-const makeView = <M extends Model.Viewable, P extends object = Record<never, never>>(
+/** A model-bound view's own Building/Failed rendering, for the
+ * {@link makeView} overload that leases a {@link Model.Keyed} model itself
+ * rather than receiving an already-resolved `unit` prop. Both default to
+ * rendering nothing — construction failures are configuration bugs, not UI
+ * states, same default as {@link Unitflow}'s own `failed`. */
+export interface KeyedViewOptions<E = unknown> {
+  readonly building?: React.ReactNode;
+  readonly failed?: (cause: Cause.Cause<E>) => React.ReactNode;
+}
+
+/** Every View a {@link Model.Keyed} model gets bound to receives its own
+ * key this way — not `key`, React's own reserved prop name for
+ * reconciliation, so it can never be read back out of `props`. */
+export interface KeyedViewProps<M extends Model.AnyService> {
+  readonly modelKey: Model.KeyOf<M>;
+  readonly children?: React.ReactNode;
+}
+
+export function makeView<M extends Model.Viewable, P extends object = Record<never, never>>(
   model: M,
   render: (units: BoundUi<Model.PortsOf<M>["ui"]>, props: P) => React.ReactNode,
-): React.FC<ViewProps<M> & P> & { readonly model: M } => {
+): React.FC<ViewProps<M> & P> & { readonly model: M };
+/** Not restricted to singletons above: a keyed model resolved by a PARENT
+ * (`Model.get(Keyed, key)` inside the parent's own `make()`) is handed down
+ * as an already-resolved `unit` the same way a singleton child is — see
+ * `TaskModel` in the docs' composition example. The `options` argument
+ * (required, even `{}`) is what selects THIS overload instead — a keyed
+ * model used here means "lease it yourself, by key", not "singleton vs
+ * keyed". */
+export function makeView<
+  M extends Model.Keyed<any> & Model.Viewable,
+  P extends object = Record<never, never>,
+>(
+  model: M,
+  render: (
+    units: BoundUi<Model.PortsOf<M>["ui"]>,
+    props: P & { readonly children?: React.ReactNode },
+  ) => React.ReactNode,
+  options: KeyedViewOptions<Model.ErrorOf<M>>,
+): React.FC<KeyedViewProps<M> & P> & { readonly model: M };
+export function makeView(
+  model: Model.AnyService,
+  render: (units: Record<string, unknown>, props: Record<string, unknown>) => React.ReactNode,
+  options?: KeyedViewOptions,
+): React.FC<Record<string, unknown>> & { readonly model: Model.AnyService } {
   // Keyed by the ports object, so a Bound instance always sees one and the
   // same ui record: it is created once in `make` and never mutated, hence
   // `useBoundUi`'s per-entry hooks keep a fixed order for the component's
@@ -179,21 +220,46 @@ const makeView = <M extends Model.Viewable, P extends object = Record<never, nev
     extra,
   }: {
     readonly ui: Record<string, unknown>;
-    readonly extra: P;
-  }): React.ReactNode =>
-    // eslint-disable-next-line revizo/no-type-assertion
-    render(useBoundUi(ui) as BoundUi<Model.PortsOf<M>["ui"]>, extra);
+    readonly extra: Record<string, unknown>;
+  }): React.ReactNode => render(useBoundUi(ui), extra);
 
-  const Component = (props: ViewProps<M> & P): React.ReactNode => {
-    const { unit, ...extra } = props;
+  // `options` is fixed at `makeView`'s own call site, not per-render — this
+  // component always takes the same branch on every render, so calling
+  // `useModel` in only one of them never violates the rules of hooks.
+  const Component = (props: Record<string, unknown>): React.ReactNode => {
+    if (options === undefined) {
+      // eslint-disable-next-line revizo/no-type-assertion
+      const { unit, ...extra } = props as { readonly unit: Model.UnitPorts } & Record<string, unknown>;
+      return <Bound key={boundId(unit)} ui={unit.ui} extra={extra} />;
+    }
     // eslint-disable-next-line revizo/no-type-assertion
-    return <Bound key={boundId(unit)} ui={unit.ui} extra={extra as P} />;
+    const { modelKey, children, ...extra } = props as {
+      readonly modelKey: unknown;
+      readonly children?: React.ReactNode;
+    } & Record<string, unknown>;
+    const result = useModel(model, modelKey);
+    return ModelResult.$match(result, {
+      Building: () => options.building ?? null,
+      Failed: ({ cause }) => options.failed?.(cause) ?? null,
+      Ready: ({ model: ports }) => (
+        <Bound
+          key={boundId(ports)}
+          // The public overload requires `Model.Viewable` (`ui` always
+          // present); this erased implementation signature doesn't carry
+          // that guarantee through to the type checker.
+          // eslint-disable-next-line revizo/no-type-assertion
+          ui={ports.ui as Record<string, unknown>}
+          // eslint-disable-next-line revizo/no-type-assertion
+          extra={{ ...extra, children } as Record<string, unknown>}
+        />
+      ),
+    });
   };
   Component.displayName = `View(${model.modelKey})`;
   // The view carries its model: composition layers (e.g. a router's views
   // map) can lease the model themselves and hand the unit back in.
   return Object.assign(Component, { model });
-};
+}
 
 /**
  * Pairs a model with its View: a pure projection of the unit it receives.
@@ -201,5 +267,10 @@ const makeView = <M extends Model.Viewable, P extends object = Record<never, nev
  * outputs arrive as current values, event inputs as fire callbacks, and
  * nested child units pass through unchanged. No hooks needed in the callback — and
  * `inputs`/`outputs` stay invisible to JSX.
+ *
+ * A `Model.Keyed` model needs a third argument (`{ building?, failed? }`,
+ * `{}` included) to opt into leasing itself directly — see
+ * {@link KeyedViewOptions}. Without one, the returned component instead
+ * expects an already-resolved `unit` prop, same as a singleton model.
  */
 export const View = { make: makeView };

@@ -1,6 +1,5 @@
 import * as React from "react";
-import { type BoundUi, type Model, useBoundUi, useModel, View as UnitView } from "@unitflow/react";
-import { ModelResult } from "@unitflow/core/runtime";
+import { type BoundUi, type Model, View as UnitView } from "@unitflow/react";
 import * as Router from "./router.js";
 
 type Controller<M extends Router.AnyRouter> = Router.RouterControllerOf<M>;
@@ -64,15 +63,20 @@ export interface RouteFedModelViewEntry<R extends Router.Route.Any> {
 
 const RouteFedTypeId = Symbol.for("@unitflow/router/RouteFedView");
 
-/** Pairs a `Route.Output`-keyed model with its View — the `routeView`
- * counterpart of `@unitflow/react`'s `View.make`, for a
- * {@link RouteFedModelViewEntry}. Unlike `View.make`, it never receives a
- * `unit` prop: `MatchRenderer` hands it the matched route's `provided`
- * value instead, and the component leases the model itself
- * (`useModel(model, provided)`) — real data from the very first render,
- * nothing to forward in from outside. Renders nothing while the lease is
- * still resolving or if it fails; `render` only ever runs once `Ready`. */
-const makeRouteView = <M extends Model.Keyed<any>, P extends object = Record<never, never>>(
+/** Pairs a `Route.Output`-keyed model with its View — a thin wrapper over
+ * `@unitflow/react`'s `View.make` keyed overload, for a
+ * {@link RouteFedModelViewEntry}. Unlike a `unit`-prop View, it never
+ * receives an already-resolved unit: `MatchRenderer` hands it the matched
+ * route's `provided` value instead (renamed from `View.make`'s own
+ * `modelKey`, since that's what it actually is here), and `View.make`
+ * itself leases the model (`useModel(model, provided)`) — real data from
+ * the very first render, nothing to forward in from outside. Renders
+ * nothing while the lease is still resolving or if it fails, same as
+ * `View.make`'s defaults; `render` only ever runs once `Ready`. */
+const makeRouteView = <
+  M extends Model.Keyed<any> & Model.Viewable,
+  P extends object = Record<never, never>,
+>(
   model: M,
   render: (
     units: BoundUi<Model.PortsOf<M>["ui"]>,
@@ -81,33 +85,15 @@ const makeRouteView = <M extends Model.Keyed<any>, P extends object = Record<nev
 ): React.FC<{ readonly provided: Model.KeyOf<M>; readonly children?: React.ReactNode } & P> & {
   readonly model: M;
 } => {
-  const Bound = ({
-    ui,
-    extra,
-  }: {
-    readonly ui: Record<string, unknown>;
-    readonly extra: P & { readonly children?: React.ReactNode };
-  }): React.ReactNode =>
-    // eslint-disable-next-line revizo/no-type-assertion
-    render(useBoundUi(ui) as BoundUi<Model.PortsOf<M>["ui"]>, extra);
+  const Inner = UnitView.make(model, render, {});
 
   const Component = (
     props: { readonly provided: Model.KeyOf<M>; readonly children?: React.ReactNode } & P,
   ): React.ReactNode => {
-    const { provided, children, ...extra } = props;
-    const result = useModel(model, provided);
-    return ModelResult.$match(result, {
-      Building: () => null,
-      Failed: () => null,
-      Ready: ({ model: ports }) => (
-        <Bound
-          // eslint-disable-next-line revizo/no-type-assertion
-          ui={ports.ui as Record<string, unknown>}
-          // eslint-disable-next-line revizo/no-type-assertion
-          extra={{ ...extra, children } as unknown as P & { readonly children?: React.ReactNode }}
-        />
-      ),
-    });
+    const { provided, ...rest } = props;
+    const innerProps = { modelKey: provided, ...rest };
+    // eslint-disable-next-line revizo/no-type-assertion
+    return <Inner {...(innerProps as Parameters<typeof Inner>[0])} />;
   };
   Component.displayName = `RouteView(${model.modelKey})`;
   return Object.assign(Component, { model, [RouteFedTypeId]: true });

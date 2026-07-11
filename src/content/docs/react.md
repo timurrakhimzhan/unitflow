@@ -7,8 +7,11 @@ React is the binding layer. Models own behavior.
 
 A View is a pure projection of a unit: `View.make(Model, render)` binds the
 unit's `ui` — stores become current values, events become functions, child
-units pass through to child Views. Views never resolve models: the root unit
-comes from `Unitflow`, every other unit from its parent model's `ui`.
+units pass through to child Views. Normally a View never resolves a model
+itself: the root unit comes from `Unitflow`, every other unit from its
+parent model's `ui`. A [keyed model](/model/#keys) is the one exception — a
+View can lease one directly, by key, with no parent needed; see
+[Lease a Model Directly](#lease-a-model-directly).
 
 ## Bootstrap with Unitflow
 
@@ -86,8 +89,9 @@ Child unit  -> value passed to a child View
 
 ## Render a Child Unit
 
-Every View takes exactly one wiring prop: `unit`. When a parent model returns
-child units in `ui`, the parent View passes each unit to the child View.
+A View bound this way takes exactly one wiring prop: `unit`. When a parent
+model returns child units in `ui`, the parent View passes each unit to the
+child View.
 
 ```tsx
 export const BoardView = View.make(BoardModel, ({ boardState, taskUnits }) => (
@@ -106,6 +110,54 @@ traces back to a model decision (`Model.get`, `Model.list` push/remove). A
 flow like "opening a popover materializes its child" is a model event, which
 also makes it testable headlessly with `Registry.allSettled` — no browser
 needed.
+
+## Lease a Model Directly
+
+Pass a third argument to bind a [keyed model](/model/#keys) that leases
+itself, by key, instead of receiving an already-resolved `unit` — no parent
+needs to have resolved it first. `Model.get` inside a model's own `make()`
+still blocks until the whole subtree is ready; this is the one place a View
+gets its own independent `Building`/`Ready`/`Failed` instead of inheriting
+the root's.
+
+```tsx
+interface ProjectKey {
+  readonly id: string;
+}
+
+export class ProjectModel extends Model.Service<ProjectModel>()(
+  "docs/project",
+)<ProjectKey>()({
+  make: ({ id }) =>
+    Effect.gen(function* () {
+      const name = Store.make(fetchProjectName(id));
+      return { inputs: {}, outputs: {}, ui: { name } };
+    }),
+}) {}
+
+export const ProjectView = View.make(
+  ProjectModel,
+  ({ name }) => <h1>{name}</h1>,
+  {
+    building: <p>Loading…</p>,
+    failed: () => <p>Something went wrong.</p>,
+  },
+);
+
+// mounts anywhere — no parent needs to have resolved ProjectModel first
+export const Page = () => <ProjectView modelKey={{ id: "p1" }} />;
+```
+
+The third argument (`{ building?, failed? }`, `{}` included) is what
+selects this form — it is what tells `View.make` "lease this model
+yourself" instead of "expect an already-resolved `unit` prop". Both default
+to rendering nothing, same as `Unitflow`'s own `building`/`failed`. The
+prop is `modelKey`, not `key` — `key` is React's own reserved prop for
+reconciliation, so it can never be read back out on the receiving end.
+
+The router's `routeView` (see [Router: React](/router/react/)) is a thin
+wrapper over this same mechanism — it just supplies the matched route's
+own `Route.Output` as the key automatically, renamed to `provided`.
 
 ## View Rules
 
