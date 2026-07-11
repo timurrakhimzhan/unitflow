@@ -24,9 +24,7 @@ import {
 } from "./registry.js";
 import * as Store from "./store.js";
 
-type SinkPort = Store.Sink<any> | Event.Sink<any>;
-
-type SourcePort = Store.Source<any> | Event.Source<any>;
+type OutputPort = Store.Output<any> | Event.Output<any>;
 
 /** Nested unit ports republished in `ui` for the View to hand to child Views. */
 export interface UnitPorts {
@@ -36,16 +34,20 @@ export interface UnitPorts {
 }
 
 /**
- * What a model's `make` must return at minimum: `inputs` hold sink-capable
- * ports, or a `Store.Source` from {@link Store.input} — the owning model
- * gets read-only access to its own input (`get`/`stream`, never `set`); the
- * `Ports` narrowing below still hands everyone else a `Sink` for it, same
- * as a full `Store`. `outputs` hold only source-capable ports (a full
- * `Event` qualifies — it is both, and the `ui` narrowing turns it into a
- * `Sink` for the View to fire). A bare `Sink` cannot be republished in
- * `outputs`. `ui` additionally accepts event sinks (a mutation's `run` is
- * typed sink-only): the View fires them exactly like events. Store sinks
- * stay rejected everywhere but `inputs`.
+ * What a model's `make` must return at minimum: `inputs` hold `Event.Input`
+ * ports (a mutation's `run` qualifies — see `Mutation.Input`), or an
+ * `Event.Output` from {@link Event.input} — the owning model gets
+ * read-only access to its own input event (`get`/`stream`, never `emit`);
+ * the `Ports` narrowing below still hands everyone else an `Input` for it,
+ * same as a full `Event`. A `Store` never appears in `inputs` — a live
+ * value a model needs is a construction argument (see `Model.Keyed`), not
+ * a port: `inputs` is for occurrences the outside world fires INTO an
+ * already-running model, not data it reads back out of. `outputs` hold
+ * only output-capable ports (a full `Event` qualifies — it is both, and the
+ * `ui` narrowing turns it into an `Input` for the View to fire). A bare
+ * `Input` cannot be republished in `outputs`. `ui` additionally accepts
+ * event inputs (a mutation's `run` is typed input-only): the View fires
+ * them exactly like events.
  *
  * `ui` is optional: a headless model — a service other models resolve — has
  * no View surface and returns only `inputs`/`outputs`. `View.make` requires a
@@ -58,23 +60,31 @@ export interface UnitPorts {
  * View — only other models resolving the unit see them.
  */
 export interface Shape {
-  readonly inputs: Record<string, SinkPort | Store.InputSource<any> | Event.InputSource<any>>;
-  readonly outputs: Record<string, SourcePort>;
-  readonly ui?: Record<string, SourcePort | Event.Sink<any> | UnitPorts>;
+  readonly inputs: Record<string, Event.Input<any> | Event.InputSource<any>>;
+  readonly outputs: Record<string, OutputPort>;
+  readonly ui?: Record<string, Store.Output<any> | Event.Input<any> | Event.InputSource<any> | UnitPorts>;
 }
 
 /**
- * The capability rule of one shape section, by name: `inputs` accept sinks,
- * `ui` the View surface, and every other section — `outputs` and any extra
- * observation section alike — source-capable ports only.
- */
+ * The capability rule of one shape section, by name: `inputs` accept
+ * event inputs, `outputs` (and any extra observation section) accept
+ * output-capable ports — `ui` is narrower still: a bare `Event.Output`
+ * (subscribe-only, no `~sink`) has no View binding — `useBoundUi`
+ * (`@unitflow/react`) only special-cases a `Store` (current value) or an
+ * event it can `emit` (a fire callback); anything else passes through
+ * un-bound. A View that needs to react to a subscribe-only event should
+ * read it off a `Store` instead (e.g. via `Event.stream`), not receive the
+ * raw event. `Event.InputSource` is the one exception — the model's OWN
+ * declared input, re-exposed so the View can fire it directly; `NarrowUi`
+ * narrows it to `Event.Input` for everyone outside `make`, same as it
+ * already does for a full `Event`. */
 type Section<K> = Record<
   string,
   K extends "inputs"
-    ? SinkPort | Store.InputSource<any> | Event.InputSource<any>
+    ? Event.Input<any> | Event.InputSource<any>
     : K extends "ui"
-      ? SourcePort | Event.Sink<any> | UnitPorts
-      : SourcePort
+      ? Store.Output<any> | Event.Input<any> | Event.InputSource<any> | UnitPorts
+      : OutputPort
 >;
 
 /** An input port that also has the OTHER capability (`~source` AND `~sink`
@@ -85,17 +95,17 @@ type Section<K> = Record<
  * an `ERROR` marker so the literal the model returned stops satisfying
  * `ValidatedShape`'s constraint — caught at `make`'s own return type, not
  * just a `Model.Shape` annotation. One rule, one escape hatch: a value
- * constructed fresh uses `Store.input()`/`Event.input()`; an EXISTING full
- * store/event (the model didn't create it, or legitimately still uses it
- * elsewhere with full capability) is narrowed explicitly at the call site
- * via `Store.toInput()`/`Event.toInput()` — never a silent exemption. */
+ * constructed fresh uses `Event.input()`; an EXISTING full event (the
+ * model didn't create it, or legitimately still uses it elsewhere with full
+ * capability) is narrowed explicitly at the call site via
+ * `Event.toInput()` — never a silent exemption. */
 type ValidatedInputs<Inputs> = {
   readonly [K in keyof Inputs]: Inputs[K] extends {
     readonly "~source": true;
     readonly "~sink": true;
   }
     ? {
-        readonly ERROR: `input "${K & string}" is a full Store/Event — use Store.input()/Event.input(), or Store.toInput()/Event.toInput() for an existing one, so the model can't set its own input`;
+        readonly ERROR: `input "${K & string}" is a full Store/Event — use Event.input(), or Event.toInput() for an existing one, so the model can't set its own input`;
       }
     : Inputs[K];
 };
@@ -130,31 +140,69 @@ export interface Type<Key, A extends Shape, E, R> {
 /** Primitives that may key a model directly or appear as a record key's fields. */
 type KeyPrimitive = string | number | boolean;
 
+/** An `Event` reference specifically (`Output`/`Input`/the full descriptor,
+ * `Event.input()`'s `InputSource` included — all of them structurally
+ * extend `Output`). Excluded from {@link KeyField}/{@link KeyInput}
+ * on purpose: an event represents an OCCURRENCE over time, not a stable
+ * identity a model instance should be keyed on — see "Keying On a Live
+ * Store" in the docs for why a `Store` reference is fine here but an
+ * `Event` reference isn't. */
+type IsEventRef<T> = [T] extends [Event.Output<any> | Event.Input<any>] ? true : false;
+
+/** A single key or key-record/array field: a primitive, anything already
+ * individually valid as a whole key on its own (`Equal`/`Pipeable` —
+ * notably a `Store` reference: keying a model on a LIVE reference, not a
+ * copy, is what lets `make(key)` receive an already-real dependency — see
+ * {@link KeyInput}), or an array/plain record of {@link KeyField}s,
+ * recursing through EITHER at any depth — EXCLUDING an `Event` reference
+ * anywhere in that structure (see {@link IsEventRef}). */
+type KeyField<T> = IsEventRef<T> extends true
+  ? never
+  : T extends KeyPrimitive | Equal | Pipeable
+    ? T
+    : T extends ReadonlyArray<infer Item>
+      ? [KeyField<Item>] extends [never]
+        ? never
+        : T
+      : T extends object
+        ? T extends { readonly [P in keyof T]: KeyField<T[P]> }
+          ? T
+          : never
+        : never;
+
 /**
  * Validates a key wherever one enters the system — `Model.get`/`dispose` (via
  * {@link KeyArgs}) and a {@link List}'s `push`/`insert`/`get`/`remove`: a
  * primitive, an already-`Equal` key object (or a
- * `Data.Class` instance — `Pipeable` is its v4 type-level marker), or a FLAT
- * record of primitives (tagged-enum members qualify). Anything else — notably
- * a record with a nested object field — collapses to `never`, so the call
- * fails to compile: keys are identifiers, flat by contract. In v4 plain
- * records natively carry deep structural `Equal`/`Hash` semantics, so a raw
- * flat literal keys an instance directly; keys must not be mutated after use
- * (`Equal` caches comparisons per object pair).
+ * `Data.Class` instance — `Pipeable` is its v4 type-level marker), a
+ * `Store` reference (also `Pipeable` — see {@link KeyField}), or an
+ * array/plain record of {@link KeyField}s, nested arbitrarily deep (e.g. a
+ * route's whole `Route.Output`, list-of-records included). An `Event`
+ * reference is the only thing rejected, at ANY depth — see {@link
+ * IsEventRef}. Plain objects and arrays carry their OWN Effect v4
+ * structural `Equal`/`Hash` recursively, so a raw nested literal keys an
+ * instance directly; keys must not be mutated after use (`Equal` caches
+ * comparisons per object pair).
  */
-export type KeyInput<Key> = [Key] extends [KeyPrimitive]
-  ? Key
-  : [Key] extends [Equal | Pipeable]
+export type KeyInput<Key> = IsEventRef<Key> extends true
+  ? never
+  : [Key] extends [KeyPrimitive]
     ? Key
-    : // The `object` guard keeps non-object keys (notably a singleton's `void`)
-      // out of the flat-record check: a homomorphic mapped type over a
-      // non-object generic resolves to the type itself, which would make the
-      // check vacuously true.
-      Key extends object
-      ? Key extends { readonly [P in keyof Key]: KeyPrimitive }
-        ? Key
-        : never
-      : never;
+    : [Key] extends [Equal | Pipeable]
+      ? Key
+      : Key extends ReadonlyArray<infer Item>
+        ? [KeyField<Item>] extends [never]
+          ? never
+          : Key
+        : // The `object` guard keeps non-object keys (notably a singleton's
+          // `void`) out of the record check: a homomorphic mapped type over a
+          // non-object generic resolves to the type itself, which would make
+          // the check vacuously true.
+          Key extends object
+          ? Key extends { readonly [P in keyof Key]: KeyField<Key[P]> }
+            ? Key
+            : never
+          : never;
 
 export interface ServiceClass<
   Self,
@@ -187,7 +235,7 @@ export type AnyService = Context.Service<any, any> & {
 
 /** A {@link Shape} whose `ui` section is present: what a View can bind. */
 export interface ViewableShape extends Shape {
-  readonly ui: Record<string, SourcePort | Event.Sink<any> | UnitPorts>;
+  readonly ui: Record<string, Store.Output<any> | Event.Input<any> | Event.InputSource<any> | UnitPorts>;
 }
 
 /** A model whose shape exposes a `ui` section — the bound `View.make`
@@ -208,6 +256,16 @@ export type Viewable = AnyService & {
  * keyed models. `hasKey` is a plain literal, immune to that. */
 export type Singleton = AnyService & {
   readonly modelType: { readonly hasKey: false };
+};
+
+/** A model keyed by EXACTLY `Key` — the `Singleton` complement: `hasKey`
+ * pins `true` for the same "narrow on a plain literal, not the key
+ * function's type" reason `Singleton` does, and `key: () => Key` pins the
+ * exact key shape so a model keyed by something else is rejected wherever
+ * `Keyed<SpecificKey>` is expected (e.g. a route-fed page model, keyed by
+ * that route's own `Route.Output`). */
+export type Keyed<Key> = AnyService & {
+  readonly modelType: { readonly hasKey: true; readonly key: () => Key };
 };
 
 type AnyEffect = Effect.Effect<Shape, unknown, unknown>;
@@ -313,14 +371,30 @@ export interface Builder<Self, Id extends string> {
    * ports of `Shapes["k"]` instead of the model-wide shape. The map is a
    * declaration, not a proof — `make` must actually build the narrower
    * shape it claims for each key.
+   *
+   * The `[Key] extends [KeyInput<Key>]` check in the returned function's
+   * result forces the SAME check `Model.get`/`Model.dispose` apply to a key
+   * VALUE (via {@link KeyArgs}) onto the key TYPE, right here at
+   * declaration — a plain constraint on `Key` itself (`Key extends
+   * KeyInput<Key>`) reports as a circular constraint (TS2313), since
+   * `KeyInput` conditionally inspects `Key`'s own shape; a conditional
+   * check in the RETURN position is deferred, so it isn't. Without this, a
+   * model keyed by something `KeyInput` would reject (a genuinely nested
+   * plain-object field, an `Event` reference) still compiles fine — the
+   * error only surfaces later, far away, as `Model.get` becoming
+   * uncallable (`KeyArgs<Key>` resolving to `readonly [key: never]`).
    */
   <Key, Shapes extends { readonly [K in Key & PropertyKey]: Shape } = never>(): <
     Make extends (key: Key) => AnyEffect,
   >(
     options: KeyedOptions<Key, Make>,
-  ) => [Shapes] extends [never]
-    ? KeyedService<Self, Id, Key, Make>
-    : KeyedShapeService<Self, Id, Key, Shapes, Make>;
+  ) => [Key] extends [KeyInput<Key>]
+    ? [Shapes] extends [never]
+      ? KeyedService<Self, Id, Key, Make>
+      : KeyedShapeService<Self, Id, Key, Shapes, Make>
+    : {
+        readonly ERROR: "Key is not a valid model key — see Model.KeyInput (a primitive, an Equal/Pipeable value such as a Store reference, or a FLAT record of those; not an Event reference, not a nested plain object)";
+      };
 }
 
 export type KeyOf<M extends AnyService> = ReturnType<M["modelType"]["key"]>;
@@ -332,30 +406,26 @@ export type ErrorOf<M extends AnyService> = ReturnType<M["modelType"]["error"]>;
 export type ServicesOf<M extends AnyService> = ReturnType<M["modelType"]["services"]>;
 
 type NarrowInput<T> =
-  T extends Store.Store<infer A>
-    ? Store.Sink<A>
-    : T extends Store.InputSource<infer A>
-      ? Store.Sink<A>
-      : T extends Event.Event<infer A>
-        ? Event.Sink<A>
-        : T extends Event.InputSource<infer A>
-          ? Event.Sink<A>
-          : T;
+  T extends Event.Event<infer A>
+    ? Event.Input<A>
+    : T extends Event.InputSource<infer A>
+      ? Event.Input<A>
+      : T;
 
 type NarrowOutput<T> =
   T extends Store.Store<infer A>
-    ? Store.Source<A>
+    ? Store.Output<A>
     : T extends Event.Event<infer A>
-      ? Event.Source<A>
+      ? Event.Output<A>
       : T;
 
 type NarrowUi<T> =
   T extends Store.Store<infer A>
-    ? Store.Source<A>
+    ? Store.Output<A>
     : T extends Event.Event<infer A>
-      ? Event.Sink<A>
+      ? Event.Input<A>
       : T extends Event.InputSource<infer A>
-        ? Event.Sink<A>
+        ? Event.Input<A>
         : T;
 
 /**
@@ -656,14 +726,14 @@ export const dispose = <M extends AnyService>(
 /** A dynamic owned collection of keyed child model instances — see {@link list}. */
 export interface List<M extends AnyService> {
   /** The children's public ports, paired with their list keys, in list order. */
-  readonly items: Store.Source<ReadonlyArray<ListItem<M>>>;
+  readonly items: Store.Output<ReadonlyArray<ListItem<M>>>;
   /** One inner store picked per child, collapsed into ONE store whose value
    * is the array of their current values: recomputes and re-subscribes when
    * the composition changes, re-emits when any picked store changes, and
    * never re-emits for a removed child's stores. An empty list is `[]`. */
   readonly select: <A>(
-    pick: (item: ListItem<M>) => Store.Source<A>,
-  ) => Store.Source<ReadonlyArray<A>>;
+    pick: (item: ListItem<M>) => Store.Output<A>,
+  ) => Store.Output<ReadonlyArray<A>>;
   /** Look up an existing child by key. */
   readonly get: (
     key: KeyInput<KeyOf<M>>,
@@ -850,7 +920,7 @@ export const list = <M extends AnyService>(
 
     return {
       items,
-      select: <A>(pick: (item: ListItem<M>) => Store.Source<A>): Store.Source<ReadonlyArray<A>> =>
+      select: <A>(pick: (item: ListItem<M>) => Store.Output<A>): Store.Output<ReadonlyArray<A>> =>
         Flatten.make(items, pick),
       get: (key: KeyInput<KeyOf<M>>) =>
         Effect.sync(() => Option.map(MutableHashMap.get(byKey, key), (entry) => entry.ports)),

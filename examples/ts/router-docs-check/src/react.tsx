@@ -89,6 +89,34 @@ void BoundNavigate;
 void BoundMatchRoute;
 // #endregion bind-components
 
+// #region routeview
+import * as Effect from "effect/Effect";
+import { Model, Store } from "@unitflow/core";
+import { routeView } from "@unitflow/router/react";
+import { AdminRouter } from "./middleware";
+
+// Keyed by the ROUTE's own Output — no placeholder, no Option, real data
+// on the very first line of make(), for a value the model needs immediately
+// (e.g. as a Query dependency at construction), not just to re-expose later.
+export class DashboardRouteViewModel extends Model.Service<DashboardRouteViewModel>()(
+  "docs/DashboardRouteView",
+)<{ readonly user: string }>()({
+  make: ({ user }) =>
+    Effect.gen(function* () {
+      const greeting = Store.make(`Hello, ${user}`);
+      return { inputs: {}, outputs: {}, ui: { greeting } };
+    }),
+}) {}
+
+const DashboardRouteView = routeView(DashboardRouteViewModel, ({ greeting }) => <p>{greeting}</p>);
+
+// routeView entries skip makePages entirely — the router leases the model
+// itself, lazily, the moment "dashboard" first matches.
+export const AdminRouteViewApp = RouterView.make(AdminRouter.model, {
+  routes: { dashboard: DashboardRouteView },
+});
+// #endregion routeview
+
 // #region mount
 import * as React from "react";
 import { createRoot } from "react-dom/client";
@@ -117,26 +145,24 @@ void UserRoute;
 
 // #region validate-negative
 // Not a doc snippet — a regression check: RouterView.make must reject a
-// page model whose input disagrees with its route's Route.Output, the same
-// way a direct makePages(...) call already does.
-import * as Effect from "effect/Effect";
-import { Model, Store } from "@unitflow/core";
-import { AdminRouter } from "./middleware";
-
-class BadDashboardPageModel extends Model.Service<BadDashboardPageModel>()(
-  "docs/BadDashboardPage",
-)({
+// routeView model keyed by something other than its route's own
+// Route.Output, at the position it's wired into.
+class MismatchedRouteViewModel extends Model.Service<MismatchedRouteViewModel>()(
+  "docs/MismatchedRouteView",
+)<{ readonly user: number }>()({
+  // number, but Route.Output's user is a string
   make: () =>
     Effect.gen(function* () {
-      const user = Store.input(0); // number, but Route.Output's user is a string
-      return { inputs: { user }, outputs: {}, ui: { user } };
+      return { inputs: {}, outputs: {}, ui: {} };
     }),
 }) {}
 
+const MismatchedRouteView = routeView(MismatchedRouteViewModel, () => null);
+
 export const BadAdminView = RouterView.make(AdminRouter.model, {
   routes: {
-    // @ts-expect-error inputs.user: number disagrees with Route.Output's user: string
-    dashboard: BadDashboardPageModel,
+    // @ts-expect-error MismatchedRouteViewModel's key disagrees with Route.Output's user: string
+    dashboard: MismatchedRouteView,
   },
 });
 // #endregion validate-negative

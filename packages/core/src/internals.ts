@@ -1,5 +1,5 @@
 import { type Pipeable, pipeArguments } from "effect/Pipeable";
-import type { Source } from "./store.js";
+import type { Output } from "./store.js";
 
 /**
  * INTERNAL. The flattened read-only store behind `Model.list(...).select`: an
@@ -24,13 +24,13 @@ const PipeableProto: Pipeable = {
 };
 
 interface FlattenState {
-  readonly source: Source<ReadonlyArray<any>>;
-  readonly pick: (item: any) => Source<any>;
+  readonly source: Output<ReadonlyArray<any>>;
+  readonly pick: (item: any) => Output<any>;
 }
 
 /** A flattened read-only store: no state of its own — `get` computes from the
  * outer source's current items and their picked inner sources. */
-export interface Flatten<A> extends Source<ReadonlyArray<A>> {
+export interface Flatten<A> extends Output<ReadonlyArray<A>> {
   readonly [FlattenTypeId]: FlattenState;
 }
 
@@ -42,8 +42,8 @@ export const stateOf = (store: Flatten<any>): FlattenState => store[FlattenTypeI
 let nextFlattenId = 0;
 
 export const make = <Item, A>(
-  source: Source<ReadonlyArray<Item>>,
-  pick: (item: Item) => Source<A>,
+  source: Output<ReadonlyArray<Item>>,
+  pick: (item: Item) => Output<A>,
 ): Flatten<A> =>
   // The store brand is the same global symbol `store.ts` declares, but
   // TypeScript cannot unify the two unique-symbol declarations across modules.

@@ -35,8 +35,8 @@ export const ModelResult = Data.taggedEnum<ModelResultDefinition>();
  */
 export interface UnitflowRuntime<R, ER> {
   readonly runtime: ManagedRuntime.ManagedRuntime<R | Registry, ER>;
-  readonly getStore: <A>(store: Store.Source<A>) => A;
-  readonly subscribeStore: <A>(store: Store.Source<A>, listener: () => void) => () => void;
+  readonly getStore: <A>(store: Store.Output<A>) => A;
+  readonly subscribeStore: <A>(store: Store.Output<A>, listener: () => void) => () => void;
   readonly getModel: <M extends Model.AnyService>(
     model: M,
     key: Model.KeyOf<M>,
@@ -46,7 +46,7 @@ export interface UnitflowRuntime<R, ER> {
     key: Model.KeyOf<M>,
     listener: () => void,
   ) => () => void;
-  readonly emit: <E extends Event.Sink<any>>(
+  readonly emit: <E extends Event.Input<any>>(
     event: E,
     ...args: Event.EmitArgs<Event.PayloadOf<E>>
   ) => void;
@@ -74,7 +74,7 @@ export const make = <R, ER>(layer: Layer.Layer<R, ER, Registry>): UnitflowRuntim
   // Structural keying, mirroring the registry's own instance map.
   const modelEntries = MutableHashMap.empty<InstanceKey, ModelEntry>();
 
-  const storeEntry = <A>(store: Store.Source<A>): StoreEntry => {
+  const storeEntry = <A>(store: Store.Output<A>): StoreEntry => {
     const existing = storeEntries.get(store.id);
     if (existing !== undefined) return existing;
 
@@ -91,13 +91,13 @@ export const make = <R, ER>(layer: Layer.Layer<R, ER, Registry>): UnitflowRuntim
     return entry;
   };
 
-  const getStore = <A>(store: Store.Source<A>): A => {
+  const getStore = <A>(store: Store.Output<A>): A => {
     // The entry's value is only ever written from `Store.stream(store)`.
     // eslint-disable-next-line revizo/no-type-assertion
     return storeEntry(store).value as A;
   };
 
-  const subscribeStore = <A>(store: Store.Source<A>, listener: () => void): (() => void) => {
+  const subscribeStore = <A>(store: Store.Output<A>, listener: () => void): (() => void) => {
     const entry = storeEntry(store);
     entry.listeners.add(listener);
     if (entry.fiber === undefined) {
@@ -216,7 +216,7 @@ export const make = <R, ER>(layer: Layer.Layer<R, ER, Registry>): UnitflowRuntim
     };
   };
 
-  const emit = <E extends Event.Sink<any>>(
+  const emit = <E extends Event.Input<any>>(
     event: E,
     ...args: Event.EmitArgs<Event.PayloadOf<E>>
   ): void => {

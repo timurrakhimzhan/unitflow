@@ -36,8 +36,8 @@ const PipeableProto: Pipeable = {
 };
 
 /** The subscribe capability of an event: accepted by `stream`, rejected by
- * `emit`. Model `outputs` event ports are typed as `Source`. */
-export interface Source<A> extends Pipeable {
+ * `emit`. Model `outputs` event ports are typed as `Output`. */
+export interface Output<A> extends Pipeable {
   readonly [TypeId]: typeof TypeId;
   readonly id: string;
   readonly name?: string;
@@ -46,8 +46,8 @@ export interface Source<A> extends Pipeable {
 }
 
 /** The emit capability of an event: accepted by `emit`, rejected by `stream`.
- * Model `inputs` and `ui` event ports are typed as `Sink`. */
-export interface Sink<A> extends Pipeable {
+ * Model `inputs` and `ui` event ports are typed as `Input`. */
+export interface Input<A> extends Pipeable {
   readonly [TypeId]: typeof TypeId;
   readonly id: string;
   readonly name?: string;
@@ -56,9 +56,9 @@ export interface Sink<A> extends Pipeable {
 }
 
 /** The full descriptor, held privately by the model that created it. */
-export interface Event<A> extends Source<A>, Sink<A> {}
+export interface Event<A> extends Output<A>, Input<A> {}
 
-export type PayloadOf<E> = E extends Sink<infer A> ? A : never;
+export type PayloadOf<E> = E extends Input<infer A> ? A : never;
 export type EmitArgs<A> = [A] extends [void] ? [value?: A] : [value: A];
 
 export interface Options {
@@ -79,18 +79,18 @@ export const isEvent = (value: unknown): value is Event<unknown> =>
 
 const InputTypeId = Symbol.for("@unitflow/core/Event/Input");
 
-/** An `Event.input()` result — distinguished from a plain `Source` so
+/** An `Event.input()` result — distinguished from a plain `Output` so
  * `Model.Shape`'s `inputs` section can allow this one specifically. */
-export interface InputSource<A> extends Source<A> {
+export interface InputSource<A> extends Output<A> {
   readonly [InputTypeId]: typeof InputTypeId;
 }
 
 /**
- * An event meant to sit in a model's `inputs`, typed as its `Source`: the
+ * An event meant to sit in a model's `inputs`, typed as its `Output`: the
  * owning model can only subscribe (`stream`/`waitFor`) — never `emit` it on
  * itself. `Model.Shape`'s `inputs` section narrows the SAME descriptor to
- * `Sink` for everyone else (`Model.get`, a View), the same way it already
- * narrows a model's `outputs` down to `Source`. Runtime-identical to
+ * `Input` for everyone else (`Model.get`, a View), the same way it already
+ * narrows a model's `outputs` down to `Output`. Runtime-identical to
  * {@link make} plus one marker — a type-only split, not a second event. */
 export const input = <A = void>(options?: Options): InputSource<A> => ({
   ...make<A>(options),
@@ -98,7 +98,7 @@ export const input = <A = void>(options?: Options): InputSource<A> => ({
 });
 
 /** Narrows an EXISTING full event (not one this `make` is constructing
- * fresh) to its `Source` view, for placement in `inputs` — e.g. `Query`'s
+ * fresh) to its `Output` view, for placement in `inputs` — e.g. `Query`'s
  * own `refresh` (documented to be safe to expose directly as an input,
  * even though the query's internals also emit it), or an `Event.setter`
  * over a store the model already owns outright. Same object, same id — a
@@ -136,25 +136,25 @@ export const setter = <A>(store: Store.Store<A>, options?: Pick<Options, "name">
 const CombinedTypeId = Symbol.for("@unitflow/core/CombinedEvent");
 
 interface CombinedState {
-  readonly sources: ReadonlyArray<Source<any>>;
+  readonly sources: ReadonlyArray<Output<any>>;
 }
 
 /** A merged read-only event: no channel of its own — `stream` emits whenever
- * any source emits. Emitting into it does not compile (it is a `Source`). */
-export interface Combined<A> extends Source<A> {
+ * any source emits. Emitting into it does not compile (it is an `Output`). */
+export interface Combined<A> extends Output<A> {
   readonly [CombinedTypeId]: CombinedState;
 }
 
 export const isCombined = (value: unknown): value is Combined<any> =>
   typeof value === "object" && value !== null && CombinedTypeId in value;
 
-export const sourcesOf = (event: Combined<any>): ReadonlyArray<Source<any>> =>
+export const sourcesOf = (event: Combined<any>): ReadonlyArray<Output<any>> =>
   event[CombinedTypeId].sources;
 
-type SourceValue<Sources extends ReadonlyArray<Source<any>>> =
-  Sources[number] extends Source<infer A> ? A : never;
+type SourceValue<Sources extends ReadonlyArray<Output<any>>> =
+  Sources[number] extends Output<infer A> ? A : never;
 
-export const combine = <const Sources extends ReadonlyArray<Source<any>>>(
+export const combine = <const Sources extends ReadonlyArray<Output<any>>>(
   sources: Sources,
   options?: Pick<Options, "name">,
 ): Combined<SourceValue<Sources>> => ({
@@ -167,7 +167,7 @@ export const combine = <const Sources extends ReadonlyArray<Source<any>>>(
 });
 
 export const pubsub = Effect.fnUntraced(function* <A>(
-  event: Source<A> | Sink<A>,
+  event: Output<A> | Input<A>,
 ): Generator<Effect.Effect<unknown, never, Registry>, PubSub.PubSub<A>, never> {
   if (isCombined(event)) {
     return yield* Effect.die(
@@ -283,14 +283,14 @@ export const dispatchUnsafe = <A>(
   closeWindow?.();
 };
 
-const emitSlow = <A>(event: Sink<A>, value: A): Effect.Effect<void, never, Registry> =>
+const emitSlow = <A>(event: Input<A>, value: A): Effect.Effect<void, never, Registry> =>
   Effect.gen(function* () {
     const registry = yield* Registry;
     const channel = yield* pubsub(event);
     yield* Effect.sync(() => dispatchUnsafe(registry, channel, event, value));
   });
 
-export const emit = <E extends Sink<any>>(
+export const emit = <E extends Input<any>>(
   event: E,
   ...args: EmitArgs<PayloadOf<E>>
 ): Effect.Effect<void, never, Registry> => {
@@ -322,7 +322,7 @@ export const emit = <E extends Sink<any>>(
  * live in the `Scope` this runs in (the stream's own scope via
  * `Stream.unwrap` — released when the stream ends). */
 const subscribedSource = <A>(
-  event: Source<A>,
+  event: Output<A>,
 ): Effect.Effect<Stream.Stream<A, never, Registry>, never, Registry | Scope.Scope> => {
   if (isSetter(event)) return Effect.succeed(Store.stream(targetOf(event)));
   if (isCombined(event)) {
@@ -347,37 +347,37 @@ const subscribedSource = <A>(
   });
 };
 
-export const stream = <A>(event: Source<A>): Stream.Stream<A, never, Registry> => {
+export const stream = <A>(event: Output<A>): Stream.Stream<A, never, Registry> => {
   if (isSetter(event)) return Store.stream(targetOf(event));
   return Stream.unwrap(subscribedSource(event));
 };
 
-type ForwardInput<A> = Source<A> | Effect.Effect<Source<A>, any, any>;
+type ForwardInput<A> = Output<A> | Effect.Effect<Output<A>, any, any>;
 
-type ForwardResult<A, Input extends ForwardInput<A>> =
-  Input extends Effect.Effect<infer E extends Source<A>, infer EffE, infer EffR>
+type ForwardResult<A, Arg extends ForwardInput<A>> =
+  Arg extends Effect.Effect<infer E extends Output<A>, infer EffE, infer EffR>
     ? Effect.Effect<E, EffE, EffR | Registry>
-    : Input extends Source<A>
-      ? Effect.Effect<Input, never, Registry>
+    : Arg extends Output<A>
+      ? Effect.Effect<Arg, never, Registry>
       : never;
 
-/** Subscribes to `source` and emits every occurrence into `sink` — forked
+/** Subscribes to `source` and emits every occurrence into `input` — forked
  * into the enclosing model's scope, same lifetime as `Registry.run`.
  * Data-last, and same dual-input shape as {@link handler}: pipe a plain
  * event/store or something that resolves to one, e.g.
- * `store.pipe(Store.changed, Event.forwardTo(sink))`. Resolves to the
+ * `store.pipe(Store.changed, Event.forwardTo(input))`. Resolves to the
  * source, like `handler`, so the pipe can keep going. */
-export const forwardTo = <A>(sink: Sink<A>) => {
+export const forwardTo = <A>(input: Input<A>) => {
   const attach = (
-    sourceOrEffect: Source<A> | Effect.Effect<Source<A>, unknown, unknown>,
-  ): Effect.Effect<Source<A>, unknown, unknown> =>
+    sourceOrEffect: Output<A> | Effect.Effect<Output<A>, unknown, unknown>,
+  ): Effect.Effect<Output<A>, unknown, unknown> =>
     Effect.isEffect(sourceOrEffect)
       ? Effect.flatMap(sourceOrEffect, attach)
       : Effect.as(
-          Registry.run(stream(sourceOrEffect).pipe(Stream.mapEffect((value) => emit(sink, value)))),
+          Registry.run(stream(sourceOrEffect).pipe(Stream.mapEffect((value) => emit(input, value)))),
           sourceOrEffect,
         );
-  return attach as <Input extends ForwardInput<A>>(source: Input) => ForwardResult<A, Input>;
+  return attach as <Arg extends ForwardInput<A>>(source: Arg) => ForwardResult<A, Arg>;
 };
 
 /** `waitFor` options without a timeout: the wait can only end with a match
@@ -416,45 +416,45 @@ export interface WaitForTimeoutOptions {
  * `waitFor` holds nothing and never wedges `Registry.allSettled`.
  */
 export function waitFor<A, B extends A>(
-  event: Source<A>,
+  event: Output<A>,
   predicate: (payload: A) => payload is B,
   options: WaitForTimeoutOptions,
 ): Effect.Effect<B, Cause.TimeoutError, Registry>;
 export function waitFor<A, B extends A>(
-  event: Source<A>,
+  event: Output<A>,
   predicate: (payload: A) => payload is B,
   options?: WaitForOptions,
 ): Effect.Effect<B, never, Registry>;
 export function waitFor<A>(
-  event: Source<A>,
+  event: Output<A>,
   predicate: (payload: A) => boolean,
   options: WaitForTimeoutOptions,
 ): Effect.Effect<A, Cause.TimeoutError, Registry>;
 export function waitFor<A>(
-  event: Source<A>,
+  event: Output<A>,
   predicate: (payload: A) => boolean,
   options?: WaitForOptions,
 ): Effect.Effect<A, never, Registry>;
 export function waitFor<A, E, R>(
-  event: Source<A>,
+  event: Output<A>,
   predicate: (payload: A) => Effect.Effect<boolean, E, R>,
   options: WaitForTimeoutOptions,
 ): Effect.Effect<A, E | Cause.TimeoutError, Registry | R>;
 export function waitFor<A, E, R>(
-  event: Source<A>,
+  event: Output<A>,
   predicate: (payload: A) => Effect.Effect<boolean, E, R>,
   options?: WaitForOptions,
 ): Effect.Effect<A, E, Registry | R>;
 export function waitFor<A>(
-  event: Source<A>,
+  event: Output<A>,
   options: WaitForTimeoutOptions,
 ): Effect.Effect<A, Cause.TimeoutError, Registry>;
 export function waitFor<A>(
-  event: Source<A>,
+  event: Output<A>,
   options?: WaitForOptions,
 ): Effect.Effect<A, never, Registry>;
 export function waitFor(
-  event: Source<any>,
+  event: Output<any>,
   predicateOrOptions?: WaitPredicate<any> | WaitForOptions | WaitForTimeoutOptions,
   options?: WaitForOptions | WaitForTimeoutOptions,
 ): Effect.Effect<any, any, any> {
@@ -468,13 +468,13 @@ export function waitFor(
   return awaitFirst(matches, resolved?.timeout);
 }
 
-type HandlerInput<A> = Source<A> | Effect.Effect<Source<A>, any, any>;
+type HandlerInput<A> = Output<A> | Effect.Effect<Output<A>, any, any>;
 
-type HandlerResult<A, R, Input extends HandlerInput<A>> =
-  Input extends Effect.Effect<infer E extends Source<A>, infer EffE, infer EffR>
+type HandlerResult<A, R, Arg extends HandlerInput<A>> =
+  Arg extends Effect.Effect<infer E extends Output<A>, infer EffE, infer EffR>
     ? Effect.Effect<E, EffE, EffR | R | Registry>
-    : Input extends Source<A>
-      ? Effect.Effect<Input, never, R | Registry>
+    : Arg extends Output<A>
+      ? Effect.Effect<Arg, never, R | Registry>
       : never;
 
 /**
@@ -488,7 +488,7 @@ type HandlerResult<A, R, Input extends HandlerInput<A>> =
  * const open = yield* Event.make<string>().pipe(Event.handler((url) => ...));
  * ```
  *
- * Owner-only: it takes an `Event.Source`, never a sink-only port. Apply it
+ * Owner-only: it takes an `Event.Output`, never an input-only port. Apply it
  * more than once for multiple independent handlers.
  *
  * `{ concurrency: "unbounded" }` forks each emission's handling into the
@@ -556,10 +556,10 @@ export const handler =
   <A = any, R = never>(
     handle: (value: A) => Effect.Effect<unknown, never, R>,
     options?: { readonly concurrency?: "unbounded" },
-  ): (<Input extends HandlerInput<A>>(event: Input) => HandlerResult<A, R, Input>) => {
+  ): (<Arg extends HandlerInput<A>>(event: Arg) => HandlerResult<A, R, Arg>) => {
     // Setter sources are store-backed: their handler pipeline is the store
     // stream, unchanged. Plain events take the direct dispatch path.
-    const attachStream = (source: Source<A>): Effect.Effect<void, never, R | Registry> =>
+    const attachStream = (source: Output<A>): Effect.Effect<void, never, R | Registry> =>
       options?.concurrency === "unbounded"
         ? Effect.gen(function* () {
             const scope = yield* ownerScope;
@@ -586,7 +586,7 @@ export const handler =
           })
         : Registry.run(stream(source).pipe(Stream.mapEffect(handle)));
 
-    const attachDirect = (source: Source<A>): Effect.Effect<void, never, R | Registry> =>
+    const attachDirect = (source: Output<A>): Effect.Effect<void, never, R | Registry> =>
       Effect.gen(function* () {
         const registry = yield* Registry;
         const scope = yield* ownerScope;
@@ -620,21 +620,21 @@ export const handler =
         );
       });
 
-    const attachSource = (source: Source<A>): Effect.Effect<void, never, R | Registry> => {
+    const attachSource = (source: Output<A>): Effect.Effect<void, never, R | Registry> => {
       if (isCombined(source)) {
         return Effect.forEach(
           sourcesOf(source),
-          (inner) => attachSource(inner as Source<A>),
+          (inner) => attachSource(inner as Output<A>),
           { discard: true },
         );
       }
       return isSetter(source) ? attachStream(source) : attachDirect(source);
     };
     const attach = (
-      eventOrEffect: Source<A> | Effect.Effect<Source<A>, unknown, unknown>,
-    ): Effect.Effect<Source<A>, unknown, unknown> =>
+      eventOrEffect: Output<A> | Effect.Effect<Output<A>, unknown, unknown>,
+    ): Effect.Effect<Output<A>, unknown, unknown> =>
       Effect.isEffect(eventOrEffect)
         ? Effect.flatMap(eventOrEffect, attach)
         : Effect.as(attachSource(eventOrEffect), eventOrEffect);
-    return attach as <Input extends HandlerInput<A>>(event: Input) => HandlerResult<A, R, Input>;
+    return attach as <Arg extends HandlerInput<A>>(event: Arg) => HandlerResult<A, R, Arg>;
   };

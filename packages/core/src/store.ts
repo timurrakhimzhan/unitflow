@@ -41,8 +41,8 @@ const PipeableProto: Pipeable = {
 };
 
 /** The read capability of a store: accepted by `get` and `stream`, rejected
- * by `set`. Model `outputs` and `ui` state ports are typed as `Source`. */
-export interface Source<A> extends Pipeable {
+ * by `set`. Model `outputs` and `ui` state ports are typed as `Output`. */
+export interface Output<A> extends Pipeable {
   readonly [TypeId]: typeof TypeId;
   readonly id: string;
   readonly initial: A;
@@ -51,8 +51,8 @@ export interface Source<A> extends Pipeable {
 }
 
 /** The write capability of a store: accepted by `set`, rejected by `get` and
- * `stream`. Model `inputs` store ports are typed as `Sink`. */
-export interface Sink<A> extends Pipeable {
+ * `stream`. Model `inputs` store ports are typed as `Input`. */
+export interface Input<A> extends Pipeable {
   readonly [TypeId]: typeof TypeId;
   readonly id: string;
   readonly initial: A;
@@ -61,7 +61,7 @@ export interface Sink<A> extends Pipeable {
 }
 
 /** The full descriptor, held privately by the model that created it. */
-export interface Store<A> extends Source<A>, Sink<A> {}
+export interface Store<A> extends Output<A>, Input<A> {}
 
 export interface Options {
   readonly name?: string;
@@ -80,64 +80,30 @@ export const make = <A>(initial: A, options?: Options): Store<A> => ({
 export const isStore = (value: unknown): value is Store<unknown> =>
   typeof value === "object" && value !== null && TypeId in value;
 
-const InputTypeId = Symbol.for("@unitflow/core/Store/Input");
-
-/** A `Store.input()` result — distinguished from a plain `Source` (e.g. a
- * `Combined` store) so `Model.Shape`'s `inputs` section can allow this one
- * specifically without also opening the door to a read-only computed store
- * that has nothing underneath for `set` to write to. */
-export interface InputSource<A> extends Source<A> {
-  readonly [InputTypeId]: typeof InputTypeId;
-}
-
-/**
- * A store meant to sit in a model's `inputs`, typed as its `Source`: the
- * owning model can only read it (`get`/`stream`) — never `set` it on
- * itself. `Model.Shape`'s `inputs` section narrows the SAME descriptor to
- * `Sink` for everyone else (`Model.get`, `Router.makePages`, a View), the
- * same way it already narrows a model's `outputs`/`ui` down to `Source`.
- * Runtime-identical to {@link make} plus one marker — `get`/`set` resolve
- * by `id` alone, never by the `~source`/`~sink`/input markers, so this is a
- * type-only split, not a second store. */
-export const input = <A>(initial: A, options?: Options): InputSource<A> => ({
-  ...make(initial, options),
-  [InputTypeId]: InputTypeId,
-});
-
-/** Narrows an EXISTING full store (not one this `make` is constructing
- * fresh) to its `Source` view, for placement in `inputs` — e.g. a
- * dependency's own store the model is re-exposing as its input, where
- * `Store.input()` doesn't apply because the model didn't create it. Same
- * object, same id — a type-only view, not a copy. */
-export const toInput = <A>(store: Store<A>): InputSource<A> => ({
-  ...store,
-  [InputTypeId]: InputTypeId,
-});
-
 const CombinedTypeId = Symbol.for("@unitflow/core/CombinedStore");
 
 interface CombinedState<A> {
-  readonly sources: ReadonlyArray<Source<any>>;
+  readonly sources: ReadonlyArray<Output<any>>;
   readonly compute: (...values: Array<any>) => A;
 }
 
 /** A combined read-only store: no state of its own — `get` computes from the
  * current source values, `stream` recombines on every source change. */
-export interface Combined<A> extends Source<A> {
+export interface Combined<A> extends Output<A> {
   readonly [CombinedTypeId]: CombinedState<A>;
 }
 
 export const isCombined = (value: unknown): value is Combined<any> =>
   typeof value === "object" && value !== null && CombinedTypeId in value;
 
-export const sourcesOf = (store: Combined<any>): ReadonlyArray<Source<any>> =>
+export const sourcesOf = (store: Combined<any>): ReadonlyArray<Output<any>> =>
   store[CombinedTypeId].sources;
 
-type SourceValues<Sources extends ReadonlyArray<Source<any>>> = {
-  readonly [K in keyof Sources]: Sources[K] extends Source<infer A> ? A : never;
+type SourceValues<Sources extends ReadonlyArray<Output<any>>> = {
+  readonly [K in keyof Sources]: Sources[K] extends Output<infer A> ? A : never;
 };
 
-export const combine = <const Sources extends ReadonlyArray<Source<any>>, A>(
+export const combine = <const Sources extends ReadonlyArray<Output<any>>, A>(
   sources: Sources,
   compute: (...values: SourceValues<Sources>) => A,
   options?: Options,
@@ -161,11 +127,11 @@ export const combine = <const Sources extends ReadonlyArray<Source<any>>, A>(
  */
 export const map =
   <A, B>(f: (value: A) => B, options?: Options) =>
-  (source: Source<A>): Combined<B> =>
+  (source: Output<A>): Combined<B> =>
     combine([source], f, options);
 
 export const ref = <A>(
-  store: Source<A> | Sink<A>,
+  store: Output<A> | Input<A>,
 ): Effect.Effect<SubscriptionRef.SubscriptionRef<A>, never, Registry> => {
   if (isCombined(store)) {
     return Effect.die(
@@ -182,7 +148,7 @@ export const ref = <A>(
 
 const refFromRegistry = <A>(
   registry: RegistryService,
-  store: Source<A> | Sink<A>,
+  store: Output<A> | Input<A>,
 ): Effect.Effect<SubscriptionRef.SubscriptionRef<A>, never, Registry> => {
   const existing = registry.stores.get(store.id);
   if (existing !== undefined) return Effect.succeed(existing);
@@ -233,7 +199,7 @@ const uncontended = (subscriptionRef: SubscriptionRef.SubscriptionRef<any>): boo
  */
 const evalSync = (
   registry: RegistryService,
-  store: Source<any>,
+  store: Output<any>,
   memo: Map<string, unknown> | undefined,
 ): unknown => {
   if (isCombined(store)) {
@@ -288,13 +254,13 @@ const listenersFor = (
   return listeners;
 };
 
-const offerStoreListeners = <A>(registry: RegistryService, store: Sink<A>, value: A): void => {
+const offerStoreListeners = <A>(registry: RegistryService, store: Input<A>, value: A): void => {
   const listeners = storeStreamListeners.get(registry)?.get(store.id);
   if (listeners === undefined || listeners.size === 0) return;
   for (const listener of listeners) listener.offer(value);
 };
 
-const closeStoreListeners = (registry: RegistryService, store: Sink<any> | Source<any>): void => {
+const closeStoreListeners = (registry: RegistryService, store: Input<any> | Output<any>): void => {
   const byStore = storeStreamListeners.get(registry);
   const listeners = byStore?.get(store.id);
   if (listeners === undefined) return;
@@ -332,7 +298,7 @@ const completeStoreOutstanding = (
 const writeUnsafe = <A>(
   registry: RegistryService,
   subscriptionRef: SubscriptionRef.SubscriptionRef<A>,
-  store: Sink<A>,
+  store: Input<A>,
   value: A,
 ): void => {
   const closeWindow = registry.debug !== undefined ? registry.debug.write(store, value) : undefined;
@@ -343,7 +309,7 @@ const writeUnsafe = <A>(
 };
 
 const trackedSetSlow = <A>(
-  store: Sink<A>,
+  store: Input<A>,
   value: A,
 ): Effect.Effect<void, never, Registry> =>
   Effect.flatMap(Registry, (registry) =>
@@ -361,7 +327,7 @@ const trackedSetSlow = <A>(
  * minus the bookkeeping. A missing ref or a held permit (an effectful
  * `SubscriptionRef` update in flight) falls back to the effectful path.
  */
-const trackedSet = <A>(store: Sink<A>, value: A): Effect.Effect<void, never, Registry> =>
+const trackedSet = <A>(store: Input<A>, value: A): Effect.Effect<void, never, Registry> =>
   Effect.withFiber((fiber) => {
     const registry = Context.getOrUndefined(fiber.context, Registry);
     if (registry !== undefined) {
@@ -376,7 +342,7 @@ const trackedSet = <A>(store: Sink<A>, value: A): Effect.Effect<void, never, Reg
 
 /** The effectful pull path: materializes any missing refs (with their scope
  * finalizers) while resolving. Only taken when {@link evalSync} bailed. */
-const getSlow = <A>(store: Source<A>): Effect.Effect<A, never, Registry> => {
+const getSlow = <A>(store: Output<A>): Effect.Effect<A, never, Registry> => {
   if (isCombined(store)) {
     const { compute, sources } = store[CombinedTypeId];
     return Effect.map(Effect.forEach(sources, get), (values) => compute(...values));
@@ -398,13 +364,13 @@ const getSlow = <A>(store: Source<A>): Effect.Effect<A, never, Registry> => {
  * without effects. `None` when a needed ref is not materialized. */
 export const evalForDebug = (
   registry: RegistryService,
-  store: Source<any>,
+  store: Output<any>,
 ): Option.Option<unknown> => {
   const value = evalSync(registry, store, new Map());
   return value === Unresolved ? Option.none() : Option.some(value);
 };
 
-export const get = <A>(store: Source<A>): Effect.Effect<A, never, Registry> =>
+export const get = <A>(store: Output<A>): Effect.Effect<A, never, Registry> =>
   Effect.withFiber((fiber) => {
     const registry = Context.getOrUndefined(fiber.context, Registry);
     if (registry !== undefined) {
@@ -419,7 +385,7 @@ export const get = <A>(store: Source<A>): Effect.Effect<A, never, Registry> =>
   });
 
 const trackedModifySlow = <A, B>(
-  store: Sink<A>,
+  store: Input<A>,
   f: (value: A) => readonly [B, A],
 ): Effect.Effect<B, never, Registry> =>
   Effect.flatMap(Registry, (registry) =>
@@ -440,7 +406,7 @@ const trackedModifySlow = <A, B>(
  * serialized. Fast path mirrors {@link trackedSet}; a throwing `f` dies just
  * like it would inside `Effect.sync`. */
 const trackedModify = <A, B>(
-  store: Sink<A>,
+  store: Input<A>,
   f: (value: A) => readonly [B, A],
 ): Effect.Effect<B, never, Registry> =>
   Effect.withFiber((fiber) => {
@@ -456,11 +422,11 @@ const trackedModify = <A, B>(
     return trackedModifySlow(store, f);
   });
 
-export const set = <A>(store: Sink<A>, value: A): Effect.Effect<void, never, Registry> =>
+export const set = <A>(store: Input<A>, value: A): Effect.Effect<void, never, Registry> =>
   trackedSet(store, value);
 
 /** Sets every given store back to its initial value, in argument order. */
-export const reset = (...stores: ReadonlyArray<Sink<any>>): Effect.Effect<void, never, Registry> =>
+export const reset = (...stores: ReadonlyArray<Input<any>>): Effect.Effect<void, never, Registry> =>
   Effect.forEach(stores, (store) => set(store, store.initial), { discard: true });
 
 /** Reads the current value, so it requires the full store — a model updates
@@ -532,7 +498,7 @@ const flattenStream = (store: Flatten<any>): Stream.Stream<any, never, Registry>
       // One simple tracked source per pipeline, each consumed sequentially by
       // its own drain — the item a pipeline is handling stays pending until
       // the recomputation (and its counted snapshot publish) completed.
-      const watch = (innerSource: Source<any>, target: Scope.Scope) =>
+      const watch = (innerSource: Output<any>, target: Scope.Scope) =>
         Effect.forkIn(
           Stream.runDrain(stream(innerSource).pipe(Stream.mapEffect(() => recompute))),
           target,
@@ -545,9 +511,9 @@ const flattenStream = (store: Flatten<any>): Stream.Stream<any, never, Registry>
       // watchers of removed occurrences and forks watchers for added ones —
       // an unchanged item's subscription is never interrupted, so a change
       // costs O(delta), not O(items).
-      const watched = new Map<string, { source: Source<any>; scopes: Array<Scope.Closeable> }>();
+      const watched = new Map<string, { source: Output<any>; scopes: Array<Scope.Closeable> }>();
       const resubscribe = Effect.gen(function* () {
-        const targets = new Map<string, { source: Source<any>; count: number }>();
+        const targets = new Map<string, { source: Output<any>; count: number }>();
         for (const item of yield* get(source)) {
           const picked = pick(item);
           const target = targets.get(picked.id);
@@ -602,7 +568,7 @@ const flattenStream = (store: Flatten<any>): Stream.Stream<any, never, Registry>
     }),
   );
 
-const storeStream = <A>(store: Source<A>): Stream.Stream<A, never, Registry> =>
+const storeStream = <A>(store: Output<A>): Stream.Stream<A, never, Registry> =>
   Stream.unwrap(
     Effect.gen(function* () {
       const registry = yield* Registry;
@@ -689,7 +655,7 @@ const storeStream = <A>(store: Source<A>): Stream.Stream<A, never, Registry> =>
     }),
   );
 
-export const stream = <A>(store: Source<A>): Stream.Stream<A, never, Registry> => {
+export const stream = <A>(store: Output<A>): Stream.Stream<A, never, Registry> => {
   if (isFlatten(store)) return flattenStream(store);
   if (isCombined(store)) {
     const sources = uniqueSources(watchSources(store));
@@ -710,45 +676,45 @@ export const stream = <A>(store: Source<A>): Stream.Stream<A, never, Registry> =
   return storeStream(store);
 };
 
-type ForwardInput<A> = Source<A> | Effect.Effect<Source<A>, any, any>;
+type ForwardInput<A> = Output<A> | Effect.Effect<Output<A>, any, any>;
 
-type ForwardResult<A, Input extends ForwardInput<A>> =
-  Input extends Effect.Effect<infer E extends Source<A>, infer EffE, infer EffR>
+type ForwardResult<A, Arg extends ForwardInput<A>> =
+  Arg extends Effect.Effect<infer E extends Output<A>, infer EffE, infer EffR>
     ? Effect.Effect<E, EffE, EffR | Registry>
-    : Input extends Source<A>
-      ? Effect.Effect<Input, never, Registry>
+    : Arg extends Output<A>
+      ? Effect.Effect<Arg, never, Registry>
       : never;
 
-/** Subscribes to `source` and writes every emission into `sink` — forked
+/** Subscribes to `source` and writes every emission into `input` — forked
  * into the enclosing model's scope, same lifetime as `Registry.run`.
  * Data-last, and accepts either a plain source or something that resolves
- * to one, e.g. `store.pipe(Store.persist(...), Store.forwardTo(sink))`.
+ * to one, e.g. `store.pipe(Store.persist(...), Store.forwardTo(input))`.
  * Resolves to the source, so the pipe can keep going. */
-export const forwardTo = <A>(sink: Sink<A>) => {
+export const forwardTo = <A>(input: Input<A>) => {
   const attach = (
-    sourceOrEffect: Source<A> | Effect.Effect<Source<A>, unknown, unknown>,
-  ): Effect.Effect<Source<A>, unknown, unknown> =>
+    sourceOrEffect: Output<A> | Effect.Effect<Output<A>, unknown, unknown>,
+  ): Effect.Effect<Output<A>, unknown, unknown> =>
     Effect.isEffect(sourceOrEffect)
       ? Effect.flatMap(sourceOrEffect, attach)
       : Effect.as(
-          Registry.run(stream(sourceOrEffect).pipe(Stream.mapEffect((value) => set(sink, value)))),
+          Registry.run(stream(sourceOrEffect).pipe(Stream.mapEffect((value) => set(input, value)))),
           sourceOrEffect,
         );
-  return attach as <Input extends ForwardInput<A>>(source: Input) => ForwardResult<A, Input>;
+  return attach as <Arg extends ForwardInput<A>>(source: Arg) => ForwardResult<A, Arg>;
 };
 
-const watchSources = (source: Source<any>): ReadonlyArray<Source<any>> =>
+const watchSources = (source: Output<any>): ReadonlyArray<Output<any>> =>
   isCombined(source) ? sourcesOf(source).flatMap(watchSources) : [source];
 
 const uniqueSources = (
-  sources: ReadonlyArray<Source<any>>,
-): ReadonlyArray<Source<any>> => [...new Map(sources.map((source) => [source.id, source])).values()];
+  sources: ReadonlyArray<Output<any>>,
+): ReadonlyArray<Output<any>> => [...new Map(sources.map((source) => [source.id, source])).values()];
 
 /** Creates an event that emits the store's value on every subsequent store
  * emission. The current replayed value is skipped, so construction does not
  * count as a change. */
 export const changed = <A>(
-  store: Source<A>,
+  store: Output<A>,
   options?: Pick<Event.Options, "name">,
 ): Effect.Effect<Event.Event<A>, never, Registry> =>
   Effect.gen(function* () {
@@ -885,37 +851,37 @@ export interface WaitForTimeoutOptions {
  * nothing and never wedges `Registry.allSettled`.
  */
 export function waitFor<A, B extends A>(
-  store: Source<A>,
+  store: Output<A>,
   predicate: (value: A) => value is B,
   options: WaitForTimeoutOptions,
 ): Effect.Effect<B, Cause.TimeoutError, Registry>;
 export function waitFor<A, B extends A>(
-  store: Source<A>,
+  store: Output<A>,
   predicate: (value: A) => value is B,
   options?: WaitForOptions,
 ): Effect.Effect<B, never, Registry>;
 export function waitFor<A>(
-  store: Source<A>,
+  store: Output<A>,
   predicate: (value: A) => boolean,
   options: WaitForTimeoutOptions,
 ): Effect.Effect<A, Cause.TimeoutError, Registry>;
 export function waitFor<A>(
-  store: Source<A>,
+  store: Output<A>,
   predicate: (value: A) => boolean,
   options?: WaitForOptions,
 ): Effect.Effect<A, never, Registry>;
 export function waitFor<A, E, R>(
-  store: Source<A>,
+  store: Output<A>,
   predicate: (value: A) => Effect.Effect<boolean, E, R>,
   options: WaitForTimeoutOptions,
 ): Effect.Effect<A, E | Cause.TimeoutError, Registry | R>;
 export function waitFor<A, E, R>(
-  store: Source<A>,
+  store: Output<A>,
   predicate: (value: A) => Effect.Effect<boolean, E, R>,
   options?: WaitForOptions,
 ): Effect.Effect<A, E, Registry | R>;
 export function waitFor(
-  store: Source<any>,
+  store: Output<any>,
   predicate: WaitPredicate<any>,
   options?: WaitForOptions | WaitForTimeoutOptions,
 ): Effect.Effect<any, any, any> {

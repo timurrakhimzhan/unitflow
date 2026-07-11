@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as RcMap from "effect/RcMap";
-import { Model, Registry, Store } from "../src/index.js";
+import { Event, Model, Registry, Store } from "../src/index.js";
 
 class PrimitiveKeyModel extends Model.Service<PrimitiveKeyModel>()(
   "/test/test/PrimitiveKeyModel",
@@ -113,6 +113,31 @@ class NestedKeyModel extends Model.Service<NestedKeyModel>()(
     }),
 }) {}
 
+class RefKeyModel extends Model.Service<RefKeyModel>()(
+  "/test/test/RefKeyModel",
+)<Store.Output<string>>()({
+  make: (user) =>
+    Effect.gen(function* () {
+      const initial = yield* Store.get(user);
+      return { inputs: {}, outputs: {}, ui: { user, snapshot: Store.make(initial) } };
+    }),
+}) {}
+
+interface RefBundleKey {
+  readonly user: Store.Output<string>;
+  readonly session: Store.Output<string>;
+}
+
+class RefBundleKeyModel extends Model.Service<RefBundleKeyModel>()(
+  "/test/test/RefBundleKeyModel",
+)<RefBundleKey>()({
+  make: (key) =>
+    Effect.gen(function* () {
+      const initial = yield* Store.get(key.user);
+      return { inputs: {}, outputs: {}, ui: { user: key.user, snapshot: Store.make(initial) } };
+    }),
+}) {}
+
 class KeySingletonModel extends Model.Service<KeySingletonModel>()(
   "/test/test/KeySingletonModel",
 )({
@@ -165,6 +190,26 @@ describe("model keys", () => {
     }).pipe(Effect.provide(RecordKeyModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
   );
 
+  it.effect("a nested record key resolves one memoized instance, structurally", () =>
+    Effect.gen(function* () {
+      const registry = yield* Registry;
+      const left: NestedKey = { project: { id: "p1" } };
+      const right: NestedKey = { project: { id: "p1" } };
+
+      // v4 plain records carry deep structural Equal/Hash recursively, so a
+      // key is not required to be flat — a nested literal already dedupes.
+      assert.isTrue(Equal.equals(left, right));
+
+      const first = yield* Model.get(NestedKeyModel, left);
+      const second = yield* Model.get(NestedKeyModel, right);
+      const other = yield* Model.get(NestedKeyModel, { project: { id: "p2" } });
+
+      assert.strictEqual(first.ui.idStore, second.ui.idStore);
+      assert.notStrictEqual(first.ui.idStore, other.ui.idStore);
+      assert.strictEqual([...(yield* RcMap.keys(registry.instances))].length, 2);
+    }).pipe(Effect.provide(NestedKeyModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
+  );
+
   it.effect("a tagged-enum key is Equal-interoperable with a plain literal of the same shape", () =>
     Effect.gen(function* () {
       const registry = yield* Registry;
@@ -203,9 +248,57 @@ describe("model keys", () => {
     }).pipe(Effect.provide(OwnerKeyModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
   );
 
-  it("rejects nested and missing keys at the entry points (compile-level)", () => {
+  it.effect("a Store/Event reference works as a key directly — make(key) gets the live ref, no ceremony", () =>
+    Effect.gen(function* () {
+      const registry = yield* Registry;
+      const parentUser = Store.make("ada");
+
+      const first = yield* Model.get(RefKeyModel, parentUser);
+      // the key IS the live store — make() read it straight away, no Option,
+      // no placeholder, no separate forwarding step.
+      assert.strictEqual(yield* Store.get(first.ui.snapshot), "ada");
+
+      const second = yield* Model.get(RefKeyModel, parentUser);
+      assert.strictEqual(first, second);
+
+      const otherUser = Store.make("noah");
+      const third = yield* Model.get(RefKeyModel, otherUser);
+      assert.notStrictEqual(first, third);
+      assert.strictEqual(yield* Store.get(third.ui.snapshot), "noah");
+      assert.strictEqual([...(yield* RcMap.keys(registry.instances))].length, 2);
+    }).pipe(Effect.provide(RefKeyModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
+  );
+
+  it.effect("a flat record BUNDLING several store refs also works as a key", () =>
+    Effect.gen(function* () {
+      const parentUser = Store.make("ada");
+      const session = Store.make("s1");
+
+      const first = yield* Model.get(RefBundleKeyModel, { user: parentUser, session });
+      assert.strictEqual(yield* Store.get(first.ui.snapshot), "ada");
+
+      const second = yield* Model.get(RefBundleKeyModel, { user: parentUser, session });
+      assert.strictEqual(first, second);
+    }).pipe(Effect.provide(RefBundleKeyModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
+  );
+
+  it("rejects an Event reference as a key, bare or bundled (compile-level)", () => {
     const check = Effect.fnUntraced(function* () {
-      // @ts-expect-error a model key must be FLAT — a nested record is not a valid key input
+      const savedEvent = Event.make<void>();
+      const parentUser = Store.make("ada");
+
+      // @ts-expect-error an Event is an occurrence, not a stable identity — not a valid key
+      const bare = yield* Model.get(RefKeyModel, savedEvent);
+      // @ts-expect-error same rule inside a bundled record key
+      const bundled = yield* Model.get(RefBundleKeyModel, { user: parentUser, session: savedEvent });
+
+      return { bare, bundled };
+    });
+    assert.isFunction(check);
+  });
+
+  it("accepts a nested key and rejects a missing one at the entry points (compile-level)", () => {
+    const check = Effect.fnUntraced(function* () {
       const nested = yield* Model.get(NestedKeyModel, { project: { id: "p1" } });
       // @ts-expect-error a keyed model requires its key
       const missing = yield* Model.get(RecordKeyModel);
@@ -213,7 +306,6 @@ describe("model keys", () => {
       const valid = yield* Model.get(RecordKeyModel, { owner: "o", id: 1 });
 
       const list = yield* Model.list(NestedKeyModel);
-      // @ts-expect-error a list child key must be FLAT as well
       yield* list.push({ project: { id: "p1" } });
 
       return { nested, missing, singleton, valid };

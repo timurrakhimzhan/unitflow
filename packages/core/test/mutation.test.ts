@@ -14,9 +14,9 @@ import * as Mutation from "../src/mutation.js";
 import * as Query from "../src/query.js";
 
 type BoundUi<Ui> = {
-  readonly [K in keyof Ui]: Ui[K] extends Store.Source<infer A>
+  readonly [K in keyof Ui]: Ui[K] extends Store.Output<infer A>
     ? A
-    : Ui[K] extends Event.Sink<infer A>
+    : Ui[K] extends Event.Input<infer A>
       ? (...args: Event.EmitArgs<A>) => void
       : Ui[K];
 };
@@ -233,7 +233,7 @@ describe("Mutation", () => {
   );
 
   it("keeps the sink's mutation type through NarrowInput and BoundUi (type-level)", () => {
-    type SaveSink = Mutation.Sink<{ readonly name: string }, { readonly id: number }, SaveError>;
+    type SaveSink = Mutation.Input<{ readonly name: string }, { readonly id: number }, SaveError>;
     type Shape = {
       readonly inputs: { readonly save: SaveSink };
       readonly outputs: Record<never, never>;

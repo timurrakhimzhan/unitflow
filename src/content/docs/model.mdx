@@ -32,7 +32,7 @@ return {
 Those sections decide how other code may use the model.
 
 ```txt
-inputs   -> write-only actions for parents, routes, persistence, and tests
+inputs   -> write-only actions for parents, persistence, and tests
 outputs  -> read-only state or events for parents, tests, and observers
 ui       -> render surface for a View (optional)
 ```
@@ -47,25 +47,28 @@ may tell the model to do something.
 
 ```ts
 inputs: {
-  setQuery,
   submit,
 }
 ```
 
-Build an input's store/event with `Store.input()`/`Event.input()`, not
-`Store.make()`/`Event.make()`: the model gets back a read-only handle (it can
-`get`/`stream` its own input, never `set`/`emit` it) — only outside code,
-through the port, can drive it. Putting a full `Store.make()`/`Event.make()`
-result directly in `inputs` is a compile error for exactly that reason. An
-already-existing full store/event the model still legitimately uses with full
-capability elsewhere (say, a dependency's own event) goes through
-`Store.toInput()`/`Event.toInput()` instead — same value, narrowed view, just
-for this one port.
+Build an input event with `Event.input()`, not `Event.make()`: the model gets
+back a read-only handle (it can `get`/`stream` its own input, never `emit`
+it) — only outside code, through the port, can drive it. Putting a full
+`Event.make()` result directly in `inputs` is a compile error for exactly
+that reason. An already-existing full event the model still legitimately
+uses with full capability elsewhere (say, a dependency's own event) goes
+through `Event.toInput()` instead — same value, narrowed view, just for this
+one port.
 
 ```ts
-const query = Store.input("");
 const submit = yield* Event.input<void>().pipe(Event.handler(() => /* ... */));
 ```
+
+A live VALUE a model needs is not an input port — a parent forwarding a
+store into a child's `inputs` invites reading it before the forward has
+happened. Key the model by the store reference instead (see
+[Keying On a Live Store](#keying-on-a-live-store)) or, for a value the route
+already resolved, key it by the route's own `Route.Output`.
 
 `outputs` can be read or subscribed to, but not written. Put values here when
 parent models, tests, analytics, or persistence code may observe them.
@@ -196,8 +199,70 @@ export class TaskModel extends Model.Service<TaskModel>()(
 }) {}
 ```
 
-The same key resolves the same model instance. Keep keys small and stable:
-primitive values, flat plain-data records, or Effect `Data` values.
+The same key resolves the same model instance. Keys can be primitive values,
+plain-data records or arrays (nesting is fine), or Effect `Data` values —
+just keep them stable and never mutate one after it's been used to lease an
+instance.
+
+### Keying On a Live Store
+
+A `Store` reference is itself a valid key — the same reference resolves the
+same instance, a different one resolves a different instance — so a model
+can require, at the type level, a live dependency from whoever leases it:
+
+```ts
+export class UsersPanelModel extends Model.Service<UsersPanelModel>()(
+  "docs/users-panel",
+)<Store.Output<string>>()({
+  make: (currentUser) =>
+    Effect.gen(function* () {
+      // currentUser is real from the first line — no Option, no placeholder,
+      // no race with whatever forwards a value in later
+      const initial = yield* Store.get(currentUser);
+      const orders = yield* Query.make({
+        stores: { currentUser },
+        handler: ({ currentUser }) => fetchOrders(currentUser),
+      });
+      return { inputs: {}, outputs: {}, ui: { orders: orders.state } };
+    }),
+}) {}
+```
+
+```ts
+const currentUser = yield* Model.get(SessionModel).pipe(
+  Effect.map((session) => session.outputs.currentUser),
+);
+const panel = yield* Model.get(UsersPanelModel, currentUser);
+```
+
+Forgetting the second argument is a compile error (`Model.get` requires a
+key), so `UsersPanelModel` can never be leased without a real, live
+`currentUser` — unlike an `inputs` port (see [Contract](#contract)), which a
+model creates itself and can be leased with nothing ever written into it.
+Reach for a key when a dependency must be there from construction; reach for
+`Event.input` for an action that may legitimately arrive later, or never.
+
+A record bundling several references works the same way — one key, several
+live dependencies:
+
+```ts
+interface PanelRefs {
+  readonly currentUser: Store.Output<string>;
+  readonly session: Store.Output<string>;
+}
+
+export class UsersPanelModel extends Model.Service<UsersPanelModel>()(
+  "docs/users-panel",
+)<PanelRefs>()({
+  make: ({ currentUser, session }) => /* ... */,
+}) {}
+```
+
+An `Event` reference is rejected as a key, bare or bundled — a `Store`
+carries a current value, a stable identity a model can reasonably depend
+on; an `Event` is an occurrence over time, with no such identity to key on.
+An action a model needs to react to — even one with exactly one legitimate
+caller — stays `Event.input`, not a key.
 
 ## Child Models
 

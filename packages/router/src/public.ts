@@ -20,7 +20,7 @@ export {
   Middleware,
   // the AppRouter constructor
   make,
-  // stitches page models to a router's routes — see `PageMap`/`ValidatePageMap`
+  // stitches page models to a router's routes — see `PageMap`
   makePages,
   // histories — provided as layers; the create* factories stay exported for
   // custom History implementations
@@ -84,8 +84,6 @@ export type {
   AnyPagesModel,
   PagesShape,
   PageMap,
-  ValidatePageMap,
-  MismatchedInputs,
   RouteUnitShape,
   RouteShapes,
   RouteIds,

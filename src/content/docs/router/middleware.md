@@ -99,6 +99,33 @@ export const AdminRouter = Router.make(
 Forget `AuthGuardLive` in the layer composition and `AdminRouter.layer` does
 not typecheck — a missing guard is a compile error, not a runtime surprise.
 
+## Running Guards Concurrently
+
+Several guards on one route run sequentially by default. When they're
+independent of each other — a session check and an unrelated preload, say —
+`Route.middlewaresConcurrency` lets them run in parallel instead:
+
+```ts
+const DashboardRoute = Route.make("dashboard", { path: "/dashboard" }).pipe(
+  Route.middleware(AuthGuard),
+  Route.middleware(PreloadDashboardData),
+  Route.middlewaresConcurrency("unbounded"),
+);
+```
+
+Also available on a group, applying to every route in it independently:
+
+```ts
+const adminRoutes = Route.group(DashboardRoute, MembersRoute)
+  .middleware(AuthGuard)
+  .middlewaresConcurrency("unbounded");
+```
+
+This only affects guards attached to the SAME route (or group) — guards
+across different levels of a nested route (a parent's vs. a child's) still
+always run parent-first, in order, so a parent's redirect still cancels the
+navigation before any child guard runs.
+
 ## Reading the Provides
 
 The guard's return value lands in the guarded route's unit as the
@@ -123,45 +150,40 @@ Several guards on one route merge their Provides (`P1 & P2`). Inside a view
 map, the same data is available as `match.provided` on the guarded route's
 match.
 
-## Forwarding Provides Into a Page Model
+## Getting Provides Into a Page Model
 
 Reading `unit.outputs.provided` from inside a page model works, but it
 duplicates the `Option.isSome` check the guard already did — the model
-can't be open unless the guard already passed. `Router.makePages` closes
-this by name: declare an input with the same name as a field of the
-route's `Route.Output`, and it's forwarded automatically on every
-navigation — no `Option`, no manual wiring.
+can't be open unless the guard already passed. It also only ever settles
+AFTER the model already exists — no good for data a page model needs on the
+very first line of its own `make`, like a Query dependency.
+
+Key the page model by its route's own `Route.Output` instead, and pair it
+with [`routeView`](/router/react/) — the model is leased lazily, exactly
+when the route first matches, with the guard's Provides as the construction
+argument:
 
 ```ts
-// NOT Option — makePages only ever writes here while "dashboard" is matched.
-// Store.input: the model reads `user`, never sets it — makePages is the
-// only writer, through the Sink the same name gets narrowed to in `inputs`.
+import { routeView } from "@unitflow/router/react";
+
+// Keyed by the route's own Output — `user` arrives on the very first line
+// of make(): no placeholder, no Option. The model isn't constructed AT ALL
+// until the guard has already provided it, so there's nothing to wire.
 export class DashboardPageModel extends Model.Service<DashboardPageModel>()(
   "docs/DashboardPage",
-)({
-  make: () =>
+)<{ readonly user: string }>()({
+  make: ({ user }) =>
     Effect.gen(function* () {
-      const user = Store.input("");
-      return { inputs: { user }, outputs: {}, ui: { user } };
+      const greeting = Store.make(`Hello, ${user}`);
+      return { inputs: {}, outputs: {}, ui: { greeting } };
     }),
 }) {}
 
-// a name (`user`) that names a field of BOTH the model's inputs and the
-// route's Route.Output gets forwarded automatically on every navigation —
-// no manual wiring. A disagreeing type at that name is a compile error.
-export const adminPages = Router.makePages(AdminRouter.model, { dashboard: DashboardPageModel });
+export const DashboardView = routeView(DashboardPageModel, ({ greeting }) => greeting);
 ```
 
-`Store.input` hands the model a read-only `Source`: the page model itself
-can `Store.get`/`Store.stream` its own `user`, but calling `Store.set` on it
-inside its own `make` fails to compile — only external code (`makePages`'s
-forwarding here) can write it, through the `Sink` the same store is
-narrowed to once placed in `inputs`.
-
-The match is by name only, not position: a model that doesn't declare a
-matching input simply never receives anything, and a name present on both
-sides with disagreeing types fails to compile — `Router.makePages`
-(and [`RouterView.make`](/router/react/), which calls it internally)
-checks every page model against its route's `Route.Output` before anything
-runs. This is also how a future loader would plug in: as a middleware that
-provides the fetched data, forwarded into the page model the same way.
+The key must match the route's `Route.Output` exactly — a model keyed by
+the wrong type, wired into the wrong route id, fails to compile at the
+`RouterView.make({ routes: {...} })` call site, the same way a mismatched
+`inputs` field used to. This is also how a future loader would plug in: as
+a middleware that provides the fetched data, arriving as the model's key.

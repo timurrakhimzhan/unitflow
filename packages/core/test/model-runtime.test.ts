@@ -116,7 +116,7 @@ const awaitSettled = <M extends Model.AnyService>(
 
 const awaitStoreValue = <A>(
   runtime: UnitflowRuntime.UnitflowRuntime<any, any>,
-  store: Store.Source<A>,
+  store: Store.Output<A>,
   expected: A,
 ): Effect.Effect<void> =>
   Effect.callback<void>((resume) => {

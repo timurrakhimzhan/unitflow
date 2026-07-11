@@ -20,7 +20,7 @@ import * as Store from "./store.js";
 export interface Query<
   A,
   E,
-  Deps extends Record<string, Store.Source<any>> = Record<never, never>,
+  Deps extends Record<string, Store.Output<any>> = Record<never, never>,
 > {
   /** The full store: the owning model may override it manually
    * (`Store.set(query.state, ...)`). */
@@ -35,7 +35,7 @@ export interface Query<
 }
 
 export type DepValues<Deps> = {
-  readonly [K in keyof Deps]: Deps[K] extends Store.Source<infer A> ? A : never;
+  readonly [K in keyof Deps]: Deps[K] extends Store.Output<infer A> ? A : never;
 };
 
 /** A query created by {@link makeInfinite}: its state is the flat
@@ -43,7 +43,7 @@ export type DepValues<Deps> = {
 export interface Paginated<
   Item,
   E,
-  Deps extends Record<string, Store.Source<any>> = Record<never, never>,
+  Deps extends Record<string, Store.Output<any>> = Record<never, never>,
 > extends Query<ReadonlyArray<Item>, E, Deps> {
   /** Emitting appends the next page (no-op while loading or exhausted). */
   readonly loadMore: Event.Event<void>;
@@ -51,7 +51,7 @@ export interface Paginated<
   readonly hasMore: Store.Combined<boolean>;
 }
 
-export interface MakeOptions<Deps extends Record<string, Store.Source<any>>, A, E, R> {
+export interface MakeOptions<Deps extends Record<string, Store.Output<any>>, A, E, R> {
   readonly stores?: Deps;
   readonly handler: (deps: DepValues<Deps>) => Effect.Effect<A, E, R>;
 }
@@ -65,7 +65,7 @@ export interface PageResult<Item, Cursor> {
 }
 
 export interface InfiniteOptions<
-  Deps extends Record<string, Store.Source<any>>,
+  Deps extends Record<string, Store.Output<any>>,
   Item,
   Cursor,
   E,
@@ -111,7 +111,7 @@ const load = <A, E, R>(
   });
 
 /** Reads the current value of every dependency store, keyed as declared. */
-const depValues = <Deps extends Record<string, Store.Source<any>>>(
+const depValues = <Deps extends Record<string, Store.Output<any>>>(
   stores: Deps,
 ): Effect.Effect<DepValues<Deps>, never, Registry> =>
   Effect.gen(function* () {
@@ -124,7 +124,7 @@ const depValues = <Deps extends Record<string, Store.Source<any>>>(
 
 /** Builds the shared query skeleton: an `AsyncResult` store fed by `request`,
  * reloaded on `refresh` and on every dependency change. */
-const base = <Deps extends Record<string, Store.Source<any>>, A, E, R>(
+const base = <Deps extends Record<string, Store.Output<any>>, A, E, R>(
   stores: Deps,
   request: (deps: DepValues<Deps>) => Effect.Effect<A, E, R>,
 ): Effect.Effect<Query<A, E, Deps>, never, R | Registry> =>
@@ -164,7 +164,7 @@ const base = <Deps extends Record<string, Store.Source<any>>, A, E, R>(
  * into the state: it is bookkeeping, not data.
  */
 export const makeInfinite = <
-  Deps extends Record<string, Store.Source<any>>,
+  Deps extends Record<string, Store.Output<any>>,
   Item,
   Cursor,
   E,
@@ -228,13 +228,13 @@ export const makeInfinite = <
 export function make<A, E, R>(
   request: Effect.Effect<A, E, R>,
 ): Effect.Effect<Query<A, E>, never, R | Registry>;
-export function make<Deps extends Record<string, Store.Source<any>>, A, E, R>(
+export function make<Deps extends Record<string, Store.Output<any>>, A, E, R>(
   options: MakeOptions<Deps, A, E, R>,
 ): Effect.Effect<Query<A, E, Deps>, never, R | Registry>;
 export function make(
   requestOrOptions:
     | Effect.Effect<any, any, any>
-    | MakeOptions<Record<string, Store.Source<any>>, any, any, any>,
+    | MakeOptions<Record<string, Store.Output<any>>, any, any, any>,
 ): Effect.Effect<any, never, any> {
   return Effect.isEffect(requestOrOptions)
     ? base({}, () => requestOrOptions)
@@ -244,7 +244,7 @@ export function make(
 /** Forks one pipeline per source that reloads the query whenever that
  * source emits. */
 export const refetchOn =
-  (...sources: ReadonlyArray<Event.Source<any>>) =>
+  (...sources: ReadonlyArray<Event.Output<any>>) =>
   <R extends Query<any, any, any>, E, Req>(
     self: Effect.Effect<R, E, Req>,
   ): Effect.Effect<R, E, Req | Registry> =>

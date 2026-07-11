@@ -1,5 +1,6 @@
 import * as React from "react";
-import { type Model, View as UnitView } from "@unitflow/react";
+import { type BoundUi, type Model, useBoundUi, useModel, View as UnitView } from "@unitflow/react";
+import { ModelResult } from "@unitflow/core/runtime";
 import * as Router from "./router.js";
 
 type Controller<M extends Router.AnyRouter> = Router.RouterControllerOf<M>;
@@ -40,10 +41,79 @@ export type RouteComponent<
  * contextual typing of plain function entries.
  *
  * `model` is `Model.Singleton`: `makePages` leases it with `Model.get`, no
- * key — see {@link Router.PageMap}. */
+ * key — see {@link Router.PageMap}. For a model that needs its route's
+ * `Route.Output` from the FIRST line of its own `make` (no placeholder, no
+ * race — see {@link RouteFedModelViewEntry}), key it by that `Route.Output`
+ * instead. */
 export interface ModelViewEntry {
   readonly model: Model.Singleton;
 }
+
+/** A model-bound view whose model is KEYED by its own route's
+ * `Route.Output` — leased lazily, exactly when the route first matches,
+ * with the guard's Provides as the key (`useModel` in `@unitflow/react`,
+ * not `makePages`'s eager singleton path). `make(provided)` gets real,
+ * typed, non-`Option` data on its first line: no placeholder is ever
+ * constructed, because the model isn't constructed AT ALL until the real
+ * value exists. Renders nothing while the lease is still resolving
+ * (`ModelResult.Building` — ordinarily one microtask, unless `make` itself
+ * does async work). */
+export interface RouteFedModelViewEntry<R extends Router.Route.Any> {
+  readonly model: Model.Keyed<Router.Route.Output<R>>;
+}
+
+const RouteFedTypeId = Symbol.for("@unitflow/router/RouteFedView");
+
+/** Pairs a `Route.Output`-keyed model with its View — the `routeView`
+ * counterpart of `@unitflow/react`'s `View.make`, for a
+ * {@link RouteFedModelViewEntry}. Unlike `View.make`, it never receives a
+ * `unit` prop: `MatchRenderer` hands it the matched route's `provided`
+ * value instead, and the component leases the model itself
+ * (`useModel(model, provided)`) — real data from the very first render,
+ * nothing to forward in from outside. Renders nothing while the lease is
+ * still resolving or if it fails; `render` only ever runs once `Ready`. */
+const makeRouteView = <M extends Model.Keyed<any>, P extends object = Record<never, never>>(
+  model: M,
+  render: (
+    units: BoundUi<Model.PortsOf<M>["ui"]>,
+    props: P & { readonly children?: React.ReactNode },
+  ) => React.ReactNode,
+): React.FC<{ readonly provided: Model.KeyOf<M>; readonly children?: React.ReactNode } & P> & {
+  readonly model: M;
+} => {
+  const Bound = ({
+    ui,
+    extra,
+  }: {
+    readonly ui: Record<string, unknown>;
+    readonly extra: P & { readonly children?: React.ReactNode };
+  }): React.ReactNode =>
+    // eslint-disable-next-line revizo/no-type-assertion
+    render(useBoundUi(ui) as BoundUi<Model.PortsOf<M>["ui"]>, extra);
+
+  const Component = (
+    props: { readonly provided: Model.KeyOf<M>; readonly children?: React.ReactNode } & P,
+  ): React.ReactNode => {
+    const { provided, children, ...extra } = props;
+    const result = useModel(model, provided);
+    return ModelResult.$match(result, {
+      Building: () => null,
+      Failed: () => null,
+      Ready: ({ model: ports }) => (
+        <Bound
+          // eslint-disable-next-line revizo/no-type-assertion
+          ui={ports.ui as Record<string, unknown>}
+          // eslint-disable-next-line revizo/no-type-assertion
+          extra={{ ...extra, children } as unknown as P & { readonly children?: React.ReactNode }}
+        />
+      ),
+    });
+  };
+  Component.displayName = `RouteView(${model.modelKey})`;
+  return Object.assign(Component, { model, [RouteFedTypeId]: true });
+};
+
+export const routeView = makeRouteView;
 
 type BoundaryComponent<M extends Router.AnyRouter = Router.RegisteredRouter> = (props: {
   readonly router: BoundRouter<M>;
@@ -57,10 +127,11 @@ type RouteById<M extends Router.AnyRouter, Id> = Extract<
 >;
 
 /** What a route id may bind to: a plain component, a model-bound view (see
- * {@link ModelViewEntry}), or — when that route has declared children via
- * `Route.addChild`/`Route.layout` — a `{ view, routes }` node whose nested
- * `routes` mirrors those children one-to-one. `view` still renders the
- * matched descendant as `children`, exactly like the flat shorthand does. */
+ * {@link ModelViewEntry}, {@link RouteFedModelViewEntry}), or — when that
+ * route has declared children via `Route.addChild`/`Route.layout` — a
+ * `{ view, routes }` node whose nested `routes` mirrors those children
+ * one-to-one. `view` still renders the matched descendant as `children`,
+ * exactly like the flat shorthand does. */
 export type RouteNode<
   M extends Router.AnyRouter,
   Id extends Router.RouteIds<Router.RouterGroupOf<M>>,
@@ -68,8 +139,12 @@ export type RouteNode<
 > =
   | RouteComponent<M, Router.RouteMatch<RouteById<M, Id>>, Units>
   | ModelViewEntry
+  | RouteFedModelViewEntry<RouteById<M, Id>>
   | {
-      readonly view: RouteComponent<M, Router.RouteMatch<RouteById<M, Id>>, Units> | ModelViewEntry;
+      readonly view:
+        | RouteComponent<M, Router.RouteMatch<RouteById<M, Id>>, Units>
+        | ModelViewEntry
+        | RouteFedModelViewEntry<RouteById<M, Id>>;
       readonly routes?: RoutesConfig<M, Units>;
     };
 
@@ -156,44 +231,19 @@ export type RouterViewComponent<M extends Router.AnyRouter, Units> = React.FC<
   >;
 };
 
-/** The model bound to a single tree node, if any — a bare `RouteComponent`
- * function (no `.model`) or a node with no `view` contributes nothing. */
-type NodeModel<Node> = Node extends { readonly model: infer Mdl }
-  ? Mdl
-  : Node extends { readonly view: infer View }
-    ? View extends { readonly model: infer Mdl }
-      ? Mdl
-      : never
-    : never;
-
-/** In-place validation of a (possibly nested) routes config's TYPE against
- * the router's own declared routes: every node's page model is checked,
- * by name, against ITS route's `Route.Output` — same rule `makePages`
- * enforces directly (see `Router.ValidatePageMap`), just walked over the
- * tree shape `RouterView.make`'s `routes` config actually has instead of a
- * flat `PageMap`. A mismatched node is swapped for an `ERROR` marker that
- * cannot structurally match the literal the caller passed in, so a bad
- * `RouterView.make({ routes: {...} })` call fails to compile at the call
- * site — this is what makes leasing `Router.makePages` internally with a
- * plain runtime-built map (below) safe: the public entry point already
- * rejected anything that map could disagree with. */
-type ValidateRoutesConfig<M extends Router.AnyRouter, Units, Config> = {
-  readonly [Id in keyof Config]: Id extends Router.RouteIds<Router.RouterGroupOf<M>>
-    ? [Router.MismatchedInputs<RouteById<M, Id>, NodeModel<Config[Id]>>] extends [never]
-      ? Config[Id] extends { readonly routes?: infer Nested }
-        ? Nested extends Record<string, unknown>
-          ? Config[Id] & { readonly routes?: ValidateRoutesConfig<M, Units, Nested> }
-          : Config[Id]
-        : Config[Id]
-      : {
-          readonly ERROR: `inputs disagree with route "${Id & string}"'s Route.Output on: ${Router.MismatchedInputs<RouteById<M, Id>, NodeModel<Config[Id]>> & string}`;
-        }
-    : Config[Id];
-};
+/** True for a `routeView(...)` result — distinguished from a plain
+ * `View.make(...)` `ModelViewEntry` by this marker: both are callable with
+ * a `.model` static, so `collectPageModels`/`MatchRenderer` need an actual
+ * runtime signal, not just shape, to tell "lease eagerly via `makePages`"
+ * apart from "lease lazily via `useModel`, keyed by `Route.Output`". */
+const isRouteFedView = (value: unknown): boolean =>
+  typeof value === "object" && value !== null && RouteFedTypeId in value;
 
 /** Walks the (possibly nested) routes config collecting every route id's
- * page model, wherever in the tree it's declared — a `{ view, routes }`
- * node's own `view` counts just like a top-level shorthand entry does. */
+ * EAGER (singleton) page model, wherever in the tree it's declared — a
+ * `{ view, routes }` node's own `view` counts just like a top-level
+ * shorthand entry does. A `routeView(...)` entry is skipped: it leases its
+ * own model lazily, keyed by the match — see {@link isRouteFedView}. */
 const collectPageModels = (
   nodes: Readonly<Record<string, unknown>>,
   into: Record<string, Model.AnyService>,
@@ -201,12 +251,12 @@ const collectPageModels = (
   for (const [routeId, entry] of Object.entries(nodes)) {
     if (entry === undefined) continue;
     if (typeof entry === "function" && "model" in entry) {
-      into[routeId] = (entry as ModelViewEntry).model;
+      if (!isRouteFedView(entry)) into[routeId] = (entry as ModelViewEntry).model;
       continue;
     }
     if (typeof entry === "object" && entry !== null && "view" in entry) {
       const node = entry as { readonly view: unknown; readonly routes?: Readonly<Record<string, unknown>> };
-      if (typeof node.view === "function" && "model" in node.view) {
+      if (typeof node.view === "function" && "model" in node.view && !isRouteFedView(node.view)) {
         into[routeId] = (node.view as ModelViewEntry).model;
       }
       if (node.routes !== undefined) collectPageModels(node.routes, into);
@@ -220,12 +270,12 @@ const makeRouterView = <
   const Views extends RouterViews<M, Units> = RouterViews<M, Units>,
 >(
   router: M,
-  views: Views & { readonly routes: ValidateRoutesConfig<M, Units, Views["routes"]> },
+  views: Views,
 ): RouterViewComponent<M, Units> => {
   // Stitch: pull the models out of the views map and let the router build
-  // its pages model around them. `views.routes` was already checked, model
-  // by model, against the router's own `Route.Output`s above — a call that
-  // disagreed never compiles, so this runtime-built map is safe to hand to
+  // its pages model around them. Every entry's model type was already
+  // checked against its route id by `RouteNode`/`RouteById` in the `views`
+  // parameter's own type, so this runtime-built map is safe to hand to
   // `makePages` opaquely; nothing left to re-verify here.
   const pageModels: Record<string, Model.AnyService> = {};
   collectPageModels(views.routes as Readonly<Record<string, unknown>>, pageModels);
@@ -317,6 +367,17 @@ const MatchRenderer = <M extends Router.AnyRouter, Units = void>({
       />
     ) : null;
   if (view === undefined) return child;
+  if (isRouteFedView(view)) {
+    // A routeView(...) entry: leases its own model lazily, keyed by this
+    // match's Route.Output — no unit from `pages` to pass in.
+    const RouteFedView = view as unknown as React.FC<{
+      readonly provided: unknown;
+      readonly children?: React.ReactNode;
+    }>;
+    return (
+      <RouteFedView provided={match.provided}>{child}</RouteFedView>
+    );
+  }
   if ("model" in (view as object)) {
     // A model-bound view: its unit was leased by the pages model.
     const PageView = view as unknown as React.FC<{

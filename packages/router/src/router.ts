@@ -10,8 +10,8 @@ import * as Option from "effect/Option";
 import { type Pipeable, pipeArguments } from "effect/Pipeable";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import type { ParseOptions } from "effect/SchemaAST";
+import type { Concurrency } from "effect/Types";
 
 const RouteTypeId = Symbol.for("@unitflow/router/Route");
 const RouteGroupTypeId = Symbol.for("@unitflow/router/RouteGroup");
@@ -272,6 +272,13 @@ export interface Route<
   readonly path: Path;
   readonly options: RouteOptions<Path, ParamsSchema, Search>;
   readonly middlewares: ReadonlyArray<AnyMiddleware>;
+  /** How this route's OWN `middlewares` run against each other — sequential
+   * (`undefined`, the default) preserves today's one-at-a-time order;
+   * `"unbounded"`/a number lets independent guards (e.g. a session check and
+   * an unrelated preload) run concurrently. Guards across DIFFERENT levels
+   * of the matched branch still run parent-first, in order — this only
+   * affects the guards attached to ONE route (or one `Route.group(...)`). */
+  readonly middlewaresConcurrency?: Concurrency;
   /** `true` only for `Route.layout`'s implicit parent: contributes no path
    * segment, can never be a leaf/exact match — distinct from `path: "/"`
    * (which is a real, navigable root) even though both normalize to `"/"`. */
@@ -457,6 +464,10 @@ export interface RouteGroup<R extends Route.Any> extends Pipeable {
    * router will require the tag's implementation layer, run it for each
    * matched route before committing a navigation. */
   middleware<M extends AnyMiddleware>(middleware: M): RouteGroup<WithMiddleware<R, M>>;
+  /** Sets how EACH route's own middlewares run against each other — see
+   * {@link Route.middlewaresConcurrency}. Applies to every route currently
+   * in the group, independently (still parent-first across route levels). */
+  middlewaresConcurrency(concurrency: Concurrency): RouteGroup<R>;
 }
 
 export type AnyRouteGroup = RouteGroup<Route.Any>;
@@ -479,6 +490,9 @@ const RouteGroupProto = {
         middlewares: [...current.middlewares, middleware],
       })),
     );
+  },
+  middlewaresConcurrency(this: AnyRouteGroup, concurrency: Concurrency) {
+    return group(...this.routes.map((current) => ({ ...current, middlewaresConcurrency: concurrency })));
   },
 };
 
@@ -582,6 +596,20 @@ export const prefix =
   <const Prefix extends string>(path: Prefix) =>
   <Group extends AnyRouteGroup>(routeGroup: Group): RouteGroup<PrefixedRoute<RoutesOf<Group>, Prefix>> =>
     routeGroup.prefix(path) as unknown as RouteGroup<PrefixedRoute<RoutesOf<Group>, Prefix>>;
+
+/** Sets how a route's (or every route currently in a group's) OWN
+ * middlewares run against each other — sequential by default, so two
+ * independent guards (say a session check and an unrelated data preload)
+ * can run concurrently instead of one after the other. Guards across
+ * DIFFERENT levels of the matched branch (parent vs. child route) still
+ * always run parent-first, in order — this only affects middlewares
+ * attached to the SAME route/group. */
+export const middlewaresConcurrency =
+  (concurrency: Concurrency) =>
+  <Self extends AnyRouteGroup | Route.Any>(self: Self): Self =>
+    (isRoute(self)
+      ? { ...self, middlewaresConcurrency: concurrency }
+      : (self as AnyRouteGroup).middlewaresConcurrency(concurrency)) as Self;
 
 export const routes = <Group extends AnyRouteGroup>(routeGroup: Group): ReadonlyArray<RoutesOf<Group>> =>
   routeGroup.routes as unknown as ReadonlyArray<RoutesOf<Group>>;
@@ -803,49 +831,6 @@ export type RouteShapes<Group extends AnyRouteGroup> = {
  * model in a singleton that leases it with the fixed key it needs. */
 export type PageMap<Group extends AnyRouteGroup> = {
   readonly [Id in RouteIds<Group>]?: Model.Singleton;
-};
-
-/** A page model's OWN declared input port value, unwrapped from the
- * `Store`/`Event` it's declared as — the type an external `Store.set`/
- * `Event.emit` into that port must supply. */
-type InputValue<T> = T extends Store.Store<infer A>
-  ? A
-  : T extends Store.InputSource<infer A>
-    ? A
-    : T extends Event.Event<infer A>
-      ? A
-      : T extends Event.InputSource<infer A>
-        ? A
-        : never;
-
-/** Every key a page model declares in `inputs` that ALSO names a field of
- * its route's `Route.Output` but disagrees on the type — `never` (none)
- * when the model is either silent on a field (doesn't want it) or agrees
- * with it. `makePages` only ever forwards fields present on BOTH sides, by
- * name; this is what makes a disagreeing name a compile error instead of a
- * silently-never-forwarded field. */
-export type MismatchedInputs<R extends Route.Any, M> = M extends Model.AnyService
-  ? {
-      readonly [K in keyof Model.ShapeOf<M>["inputs"] & keyof Route.Output<R>]: InputValue<
-        Model.ShapeOf<M>["inputs"][K]
-      > extends Route.Output<R>[K]
-        ? never
-        : K;
-    }[keyof Model.ShapeOf<M>["inputs"] & keyof Route.Output<R>]
-  : never;
-
-/** Checked at `makePages`'s call site (not baked into `PageMap` itself):
- * `Pages` there is inferred fresh from the actual object literal passed in,
- * so `Pages[Id]` is each entry's REAL model type, not an erased bound —
- * only there can a mismatched field name/type actually be caught. */
-export type ValidatePageMap<Group extends AnyRouteGroup, Pages> = {
-  readonly [Id in keyof Pages]: Id extends RouteIds<Group>
-    ? [MismatchedInputs<Extract<RoutesOf<Group>, { readonly id: Id }>, Pages[Id]>] extends [never]
-      ? Pages[Id]
-      : {
-          readonly ERROR: `inputs disagree with route "${Id & string}"'s Route.Output on: ${MismatchedInputs<Extract<RoutesOf<Group>, { readonly id: Id }>, Pages[Id]> & string}`;
-        }
-    : Pages[Id];
 };
 
 type PageServicesOfMap<Pages> = {
@@ -1182,20 +1167,19 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
 /** INTERNAL (used by RouterView): the pages model — one singleton owning
  * the router and every mapped page model, the view tree's root.
  *
- * Also the one place a route's `Output` (what its middlewares merge and
- * provide — see {@link Route.Output}) reaches a page model: for every input
- * port a page model declares whose NAME also names a field of its own
- * route's `Output`, this forwards that field in on every navigation where
- * the route is matched — `ValidatePageMap` (below, in the signature) makes
- * a name that exists on both sides but disagrees in type a compile error,
- * so a page model's declared input type is trustworthy, never `Option`:
- * this only ever writes while the route is actually matched. */
+ * Route data never flows in through a page model's `inputs` here — a
+ * mapped model is a plain `Model.Singleton`, leased once with no relation
+ * to any particular match. A model that needs its route's `Output` (see
+ * {@link Route.Output}) on the first line of its own `make` should be keyed
+ * by it and wired through `routeView` instead (`@unitflow/router/react`);
+ * one that only needs to react to it over time can read the route's own
+ * `outputs.provided` (`Store.Combined<Option<Route.Output<R>>>`) reactively. */
 export const makePages = <
   M extends AnyRouter,
   const Pages extends PageMap<RouterGroupOf<M>>,
 >(
   model: M,
-  pageMap: Pages & ValidatePageMap<RouterGroupOf<M>, Pages>,
+  pageMap: Pages,
 ): PagesModel<RouterIdOf<M>, RouterGroupOf<M>, Pages> => {
   const pagesService = Model.Service<PagesModel<RouterIdOf<M>, RouterGroupOf<M>, Pages>>()(
     `${model.modelKey}/pages` as `${RouterIdOf<M>}/pages`,
@@ -1208,30 +1192,7 @@ export const makePages = <
         const ui: Record<string, unknown> = { router: routerPorts };
         for (const [routeId, pageModel] of Object.entries(pageMap)) {
           if (pageModel === undefined) continue;
-          const ports = yield* Model.get(pageModel as Model.AnyService);
-          ui[routeId] = ports;
-
-          // eslint-disable-next-line revizo/no-type-assertion
-          const inputs = (ports as { readonly inputs: Record<string, unknown> }).inputs;
-          const inputKeys = Object.keys(inputs);
-          if (inputKeys.length === 0) continue;
-          yield* Registry.run(
-            Store.stream(routerPorts.outputs.matches).pipe(
-              Stream.mapEffect((matches) => {
-                const match = matches.find((current) => current.route.id === routeId);
-                if (match === undefined) return Effect.void;
-                // eslint-disable-next-line revizo/no-type-assertion
-                const provided = match.provided as Record<string, unknown>;
-                return Effect.forEach(
-                  inputKeys.filter((key) => key in provided),
-                  (key) =>
-                    // eslint-disable-next-line revizo/no-type-assertion
-                    Store.set(inputs[key] as Store.Sink<unknown>, provided[key]),
-                  { discard: true },
-                );
-              }),
-            ),
-          );
+          ui[routeId] = yield* Model.get(pageModel as Model.AnyService);
         }
         return { inputs: {}, outputs: {}, ui } as never;
       }),
@@ -1403,13 +1364,22 @@ const makeShape = <Group extends AnyRouteGroup>(
             search: routeSearch,
             path: item.compiledRoute.route.path,
           };
-          // Guards run parent-first, before anything commits: a failure here
-          // (RedirectError/NotFoundError) aborts the whole navigation.
-          for (const middleware of item.compiledRoute.route.middlewares) {
-            if (ranGuards.has(middleware)) continue;
-            ranGuards.add(middleware);
-            const handler = yield* middleware;
-            const value = yield* handler(routeContext);
+          // Guards run parent-first ACROSS route levels, before anything
+          // commits: a failure here (RedirectError/NotFoundError) aborts the
+          // whole navigation. WITHIN one route's own middlewares, concurrency
+          // is opt-in via `middlewaresConcurrency` (sequential by default) —
+          // results still merge in declaration order regardless of which
+          // guard actually finished first.
+          const pending = item.compiledRoute.route.middlewares.filter(
+            (candidate) => !ranGuards.has(candidate),
+          );
+          for (const candidate of pending) ranGuards.add(candidate);
+          const provides = yield* Effect.forEach(
+            pending,
+            (middleware) => Effect.flatMap(middleware, (handler) => handler(routeContext)),
+            { concurrency: item.compiledRoute.route.middlewaresConcurrency ?? 1 },
+          );
+          for (const value of provides) {
             if (value !== undefined && value !== null && typeof value === "object") {
               provided = { ...provided, ...value };
             }

@@ -65,23 +65,20 @@ void readProvided;
 // #endregion provided
 
 // #region forward
-const { makePages } = Router;
+import { routeView } from "@unitflow/router/react";
 
-// NOT Option — makePages only ever writes here while "dashboard" is matched.
-// Store.input: the model reads `user`, never sets it — makePages is the
-// only writer, through the Sink the same name gets narrowed to in `inputs`.
+// Keyed by the route's own Output — `user` arrives on the very first line
+// of make(): no placeholder, no Option. The model isn't constructed AT ALL
+// until the guard has already provided it, so there's nothing to wire.
 export class DashboardPageModel extends Model.Service<DashboardPageModel>()(
   "docs/DashboardPage",
-)({
-  make: () =>
+)<{ readonly user: string }>()({
+  make: ({ user }) =>
     Effect.gen(function* () {
-      const user = Store.input("");
-      return { inputs: { user }, outputs: {}, ui: { user } };
+      const greeting = Store.make(`Hello, ${user}`);
+      return { inputs: {}, outputs: {}, ui: { greeting } };
     }),
 }) {}
 
-// a name (`user`) that names a field of BOTH the model's inputs and the
-// route's Route.Output gets forwarded automatically on every navigation —
-// no manual wiring. A disagreeing type at that name is a compile error.
-export const adminPages = makePages(AdminRouter.model, { dashboard: DashboardPageModel });
+export const DashboardView = routeView(DashboardPageModel, ({ greeting }) => greeting);
 // #endregion forward

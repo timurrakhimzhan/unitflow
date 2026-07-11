@@ -108,10 +108,10 @@ outside code may observe successful saves.
 
 ## Forward Into Another Event
 
-Use `Event.forwardTo(sink)` to relay every occurrence of one event into
+Use `Event.forwardTo(input)` to relay every occurrence of one event into
 another model's input port, without hand-rolling
 `Event.stream(...).pipe(Stream.mapEffect(...))`. The target is the CHILD's
-already-narrowed `Sink` — reached through `Model.get`, never the child's own
+already-narrowed `Input` — reached through `Model.get`, never the child's own
 local `Event.input()` value (that one stays read-only, on purpose — see
 [Model](./model.mdx)).
 
@@ -134,8 +134,9 @@ directly off `Store.changed`:
 yield* selectedProject.pipe(Store.changed, Event.forwardTo(child.inputs.selectionChanged));
 ```
 
-`Store.forwardTo(sink)` is the store-shaped twin — see
-[Forward Into Another Store or Event](./store.md#forward-into-another-store-or-event).
+`Store.forwardTo(input)` is the store-shaped twin, though a live value's more
+common destination is now keying a model directly — see
+[Forward Into Another Store](./store.md#forward-into-another-store).
 
 ## Combine
 

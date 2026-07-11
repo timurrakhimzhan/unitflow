@@ -32,6 +32,7 @@ export {
   layout,
   merge,
   middleware,
+  middlewaresConcurrency,
   prefix,
   routes,
   schemaSearch,

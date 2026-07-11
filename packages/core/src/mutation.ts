@@ -11,13 +11,13 @@ import * as Store from "./store.js";
 const MutationTypeId = Symbol.for("@unitflow/core/Mutation");
 
 /**
- * A mutation's trigger: a sink-only event port that also carries the
+ * A mutation's trigger: an input-only event port that also carries the
  * mutation's direct executor, so `Mutation.call` can run the handler and
  * receive its typed result through the same port `Event.emit` fires
  * fire-and-forget. Valid as a model input and on the `ui` surface; it is not
- * a source: subscribing to it does not compile.
+ * an output: subscribing to it does not compile.
  */
-export interface Sink<I, A, E> extends Event.Sink<I> {
+export interface Input<I, A, E> extends Event.Input<I> {
   readonly [MutationTypeId]: {
     /** Runs the handler directly: state transitions, `done`, and the typed
      * result, serialized with the fire-and-forget path by the mutation's
@@ -34,7 +34,7 @@ export interface Sink<I, A, E> extends Event.Sink<I> {
  */
 export interface Mutation<I, A, E> {
   /** The trigger: expose it as a model input (and/or `ui` port). */
-  readonly run: Sink<I, A, E>;
+  readonly run: Input<I, A, E>;
   readonly state: Store.Store<AsyncResult.AsyncResult<A, E>>;
   readonly done: Event.Event<A>;
 }
@@ -75,7 +75,7 @@ export const make = <I, A, E, R>(
       Event.handler((input) => runOnce(input).pipe(Effect.catchCause(() => Effect.void))),
     );
 
-    const run: Sink<I, A, E> = { ...channel, [MutationTypeId]: { call: runOnce } };
+    const run: Input<I, A, E> = { ...channel, [MutationTypeId]: { call: runOnce } };
 
     return { run, state, done };
   });
@@ -87,19 +87,19 @@ export const make = <I, A, E, R>(
  * (interrupting the handler; `state` is left waiting for that run).
  */
 export const call = <I, A, E>(
-  sink: Sink<I, A, E>,
+  port: Input<I, A, E>,
   input: I,
   options?: { readonly timeout?: Duration.Input },
 ): Effect.Effect<A, E | Cause.TimeoutError> =>
   options?.timeout === undefined
-    ? sink[MutationTypeId].call(input)
-    : Effect.timeout(sink[MutationTypeId].call(input), options.timeout);
+    ? port[MutationTypeId].call(input)
+    : Effect.timeout(port[MutationTypeId].call(input), options.timeout);
 
 /** After each successful run, emits every target's `refresh`: the mutation
  * analogue of the old reactivity-key invalidation. Targets are anything with
- * a `refresh` sink (a `Query`, a model's `inputs`, ...). */
+ * a `refresh` input (a `Query`, a model's `inputs`, ...). */
 export const invalidates =
-  (...targets: ReadonlyArray<{ readonly refresh: Event.Sink<void> }>) =>
+  (...targets: ReadonlyArray<{ readonly refresh: Event.Input<void> }>) =>
   <I, A, E, EffE, R>(
     self: Effect.Effect<Mutation<I, A, E>, EffE, R>,
   ): Effect.Effect<Mutation<I, A, E>, EffE, R | Registry> =>

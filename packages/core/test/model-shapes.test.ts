@@ -50,8 +50,8 @@ describe("Model per-key shapes", () => {
       assert.strictEqual(yield* Store.get(label.outputs.label), "ready");
 
       // Types: the key literal picks the shape from the declared map.
-      const count: Store.Source<number> = counter.outputs.count;
-      const text: Store.Source<string> = label.outputs.label;
+      const count: Store.Output<number> = counter.outputs.count;
+      const text: Store.Output<string> = label.outputs.label;
       void count;
       void text;
       if (false) {

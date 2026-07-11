@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -846,77 +847,157 @@ describe("@unitflow/router", () => {
     assert.isDefined(match);
   });
 
-  it.effect("makePages forwards a route's Output into a page model's matching input", () => {
-    class ForwardGuard extends Router.Middleware<ForwardGuard>()(
-      "/test/router/forward/Guard",
-    )<{ readonly user: string }>() {}
-    const AdminRoute3 = Route.make("admin3", { path: "/admin3" });
-    const { model, routeModel } = Router.make(
-      `/test/router/forward/${++nextRouter}`,
-      Route.group(AdminRoute3).middleware(ForwardGuard),
+  it("routeView accepts a model keyed by exactly its route's Output, rejects everything else (type-level)", () => {
+    class UsersGuard extends Router.Middleware<UsersGuard>()(
+      "/test/router/routeview/Guard",
+    )<{ readonly usersList: ReadonlyArray<{ readonly id: string }> }>() {}
+    const UsersRoute5 = Route.make("users5", { path: "/users5" });
+    const { model } = Router.make(
+      `/test/router/routeview/${++nextRouter}`,
+      Route.group(UsersRoute5).middleware(UsersGuard),
     );
 
-    // NOT Option — makePages only ever writes here while "admin3" is matched.
-    class AdminPageModel extends Model.Service<AdminPageModel>()(
-      "/test/router/forward/AdminPage",
-    )({
-      make: () =>
+    class KeyedPageModel extends Model.Service<KeyedPageModel>()(
+      "/test/router/routeview/KeyedPage",
+    )<{ readonly usersList: ReadonlyArray<{ readonly id: string }> }>()({
+      make: ({ usersList }) =>
         Effect.gen(function* () {
-          const user = Store.input("");
-          return { inputs: { user }, outputs: {}, ui: { user } };
+          const count = Store.make(usersList.length);
+          return { inputs: {}, outputs: {}, ui: { count } };
         }),
     }) {}
 
-    const pages = makePages(model, { admin3: AdminPageModel });
+    class MismatchedKeyModel extends Model.Service<MismatchedKeyModel>()(
+      "/test/router/routeview/MismatchedKeyPage",
+    )<{ readonly usersList: string }>()({
+      make: () =>
+        Effect.gen(function* () {
+          return { inputs: {}, outputs: {}, ui: {} };
+        }),
+    }) {}
 
-    const guardLayer = ForwardGuard.layer(() => Effect.succeed({ user: "trinity" }));
-    const testLayer = pages.layer.pipe(
-      Layer.provideMerge(AdminPageModel.layer),
-      Layer.provideMerge(routeModel.layer),
-      Layer.provideMerge(model.layer),
-      Layer.provideMerge(guardLayer),
-      Layer.provideMerge(testEnv()),
-    );
-
-    return Effect.gen(function* () {
-      const router = yield* Model.get(model);
-      const page = yield* Model.get(AdminPageModel);
-      // leases PagesModel itself — its `make` is what wires the forwarding
-      yield* Model.get(pages);
-
-      assert.strictEqual(yield* Store.get(page.ui.user), "");
-
-      yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/admin3" }));
-      yield* Store.waitFor(page.ui.user, (user) => user === "trinity");
-
-      assert.strictEqual(yield* Store.get(page.ui.user), "trinity");
-    }).pipe(Effect.provide(testLayer));
-  });
-
-  it("rejects a page model whose input disagrees with its route's Output", () => {
-    class TypedGuard extends Router.Middleware<TypedGuard>()(
-      "/test/router/mismatch/Guard",
-    )<{ readonly user: string }>() {}
-    const AdminRoute4 = Route.make("admin4", { path: "/admin4" });
-    const { model } = Router.make(
-      `/test/router/mismatch/${++nextRouter}`,
-      Route.group(AdminRoute4).middleware(TypedGuard),
-    );
-
-    class BadPageModel extends Model.Service<BadPageModel>()(
-      "/test/router/mismatch/BadPage",
+    class SingletonPageModel extends Model.Service<SingletonPageModel>()(
+      "/test/router/routeview/SingletonPage",
     )({
       make: () =>
         Effect.gen(function* () {
-          const user = Store.input(0); // number, but Output.user is a string
-          return { inputs: { user }, outputs: {}, ui: { user } };
+          return { inputs: {}, outputs: {}, ui: {} };
         }),
     }) {}
 
     if (false) {
-      // @ts-expect-error inputs.user: number disagrees with Route.Output's user: string
-      makePages(model, { admin4: BadPageModel });
+      const good = RouterReact.routeView(KeyedPageModel, ({ count }) => count);
+      // `routeView` alone only rejects "not keyed at all" — a wrong-but-real
+      // key type is only checked once it's placed at a specific route
+      // position (RouteFedModelViewEntry<RouteById<M, Id>> below).
+      const mismatched = RouterReact.routeView(MismatchedKeyModel, () => null);
+      // @ts-expect-error a singleton model has no key at all
+      const badSingleton = RouterReact.routeView(SingletonPageModel, () => null);
+
+      const goodApp = RouterReact.RouterView.make(model, { routes: { users5: good } });
+      const badApp = RouterReact.RouterView.make(model, {
+        routes: {
+          // @ts-expect-error mismatched's key disagrees with "users5"'s Route.Output
+          users5: mismatched,
+        },
+      });
+      void goodApp;
+      void badApp;
+      void badSingleton;
     }
     assert.isTrue(true);
+  });
+
+  it.effect("middlewaresConcurrency: sequential by default — a later guard never starts before an earlier one finishes", () => {
+    class SeqGuardA extends Router.Middleware<SeqGuardA>()(
+      "/test/router/sequential/GuardA",
+    )<{ readonly a: string }>() {}
+    class SeqGuardB extends Router.Middleware<SeqGuardB>()(
+      "/test/router/sequential/GuardB",
+    )<{ readonly b: string }>() {}
+    const SeqRoute = Route.make("sequential", { path: "/sequential" }).pipe(
+      Route.middleware(SeqGuardA),
+      Route.middleware(SeqGuardB),
+    );
+    const { model } = Router.make(
+      `/test/router/sequential/${++nextRouter}`,
+      Route.group(SeqRoute),
+    );
+
+    return Effect.gen(function* () {
+      const order: Array<string> = [];
+      const GuardALive = SeqGuardA.layer(() =>
+        Effect.sync(() => {
+          order.push("a");
+          return { a: "a" };
+        }),
+      );
+      const GuardBLive = SeqGuardB.layer(() =>
+        Effect.sync(() => {
+          order.push("b");
+          return { b: "b" };
+        }),
+      );
+      const testLayer = model.layer.pipe(
+        Layer.provideMerge(GuardALive),
+        Layer.provideMerge(GuardBLive),
+        Layer.provideMerge(testEnv()),
+      );
+
+      yield* Effect.gen(function* () {
+        const router = yield* Model.get(model);
+        yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/sequential" }));
+        assert.deepStrictEqual(order, ["a", "b"]);
+      }).pipe(Effect.provide(testLayer));
+    });
+  });
+
+  it.effect("middlewaresConcurrency('unbounded') runs a route's own guards in parallel", () => {
+    class ConcGuardA extends Router.Middleware<ConcGuardA>()(
+      "/test/router/concurrent/GuardA",
+    )<{ readonly a: string }>() {}
+    class ConcGuardB extends Router.Middleware<ConcGuardB>()(
+      "/test/router/concurrent/GuardB",
+    )<{ readonly b: string }>() {}
+    const ConcurrentRoute = Route.make("concurrent", { path: "/concurrent" }).pipe(
+      Route.middleware(ConcGuardA),
+      Route.middleware(ConcGuardB),
+      Route.middlewaresConcurrency("unbounded"),
+    );
+    const { model } = Router.make(
+      `/test/router/concurrent/${++nextRouter}`,
+      Route.group(ConcurrentRoute),
+    );
+
+    return Effect.gen(function* () {
+      // A waits for a signal only B sends — sequential execution (A fully
+      // finishes before B starts) would deadlock this; the timeout turns
+      // that into a clean test failure instead of a hung suite.
+      const bSignaled = yield* Deferred.make<void>();
+      const GuardALive = ConcGuardA.layer(() =>
+        Effect.gen(function* () {
+          yield* Deferred.await(bSignaled);
+          return { a: "a" };
+        }),
+      );
+      const GuardBLive = ConcGuardB.layer(() =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(bSignaled, undefined);
+          return { b: "b" };
+        }),
+      );
+      const testLayer = model.layer.pipe(
+        Layer.provideMerge(GuardALive),
+        Layer.provideMerge(GuardBLive),
+        Layer.provideMerge(testEnv()),
+      );
+
+      yield* Effect.gen(function* () {
+        const router = yield* Model.get(model);
+        yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/concurrent" }));
+        const state = yield* Store.get(router.outputs.state);
+        assert.strictEqual(state.status, "success");
+      }).pipe(Effect.provide(testLayer), Effect.timeout("1 second"));
+    });
   });
 });

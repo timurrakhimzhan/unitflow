@@ -131,37 +131,36 @@ This is the simple way to subscribe to store changes inside a model. Reach for
 raw `Store.stream(...)` only when you need stream operators such as debounce,
 merge, throttle, or schedules.
 
-## Forward Into Another Store or Event
+## Forward Into Another Store
 
-Use `Store.forwardTo(sink)` to keep another model's input port in sync with a
-store, without hand-rolling `Store.stream(...).pipe(Stream.mapEffect(...))`.
-The target is the CHILD's already-narrowed `Sink` — reached through
-`Model.get`, never the child's own local `Store.input()` value (that one
-stays read-only, on purpose — see [Model](./model.mdx)).
+A child MODEL that needs a parent's live value is not a forwarding target —
+key the child directly by the store reference instead (see
+[Keying On a Live Store](./model.mdx#keying-on-a-live-store)): the child
+reads the SAME store, no copy, no separate port to keep in sync, no race
+between construction and the first forwarded value.
+
+`Store.forwardTo(input)` stays useful for keeping two stores YOU already own
+in sync — e.g. mirroring a persisted store into the plain one a view reads
+from, without hand-rolling `Store.stream(...).pipe(Stream.mapEffect(...))`:
 
 ```ts
-import { Model, Store } from "@unitflow/core";
-import { ChildModel } from "./child-model";
+import { Store } from "@unitflow/core";
 
-const selection = Store.make<string | null>(null);
-const child = yield* Model.get(ChildModel);
+const persisted = Store.make<LanguageFilter>("all").pipe(
+  Store.persist({ key: "language", schema: LanguageSchema }),
+);
+const active = Store.make<LanguageFilter>("all");
 
-yield* selection.pipe(Store.forwardTo(child.inputs.selection));
+yield* persisted.pipe(Store.forwardTo(active));
 ```
 
 It is pipeable and data-last, and forks into the enclosing model's scope like
 `Registry.run` — set it up once during `make`, it runs for the model's whole
-lifetime. It also accepts anything that resolves to a store, so it chains
-directly off a combinator like `Store.persist(...)`:
+lifetime.
 
-```ts
-yield* Store.make<LanguageFilter>("all").pipe(
-  Store.persist({ key: "language", schema: LanguageSchema }),
-  Store.forwardTo(child.inputs.language),
-);
-```
-
-`Event.forwardTo(sink)` is the event-shaped twin — see
+`Event.forwardTo(input)` is the event-shaped twin, still commonly aimed at a
+child's own `Event.input()` port — an action has no live value to key a
+model on, so forwarding stays the right tool there. See
 [Forward Into Another Event](./events.md#forward-into-another-event).
 
 ## Awaiting Store Values

@@ -11,16 +11,6 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { Event, InstanceScope, Model, Registry, Store } from "../src/index.js";
 
-class InputPortModel extends Model.Service<InputPortModel>()(
-  "/test/test/InputPortModel",
-)({
-  make: () =>
-    Effect.gen(function* () {
-      const user = Store.input("");
-      return { inputs: { user }, outputs: {}, ui: { user } };
-    }),
-}) {}
-
 class CounterModel extends Model.Service<CounterModel>()(
   "/test/test/CounterModel",
 )({
@@ -922,7 +912,7 @@ describe("Unitflow", () => {
         Effect.forkChild,
       );
 
-      // The ui port is an Event.Sink — the View fires it like any event.
+      // The ui port is an Event.Input — the View fires it like any event.
       yield* Event.emit(form.ui.onNameChange, "Ada");
 
       assert.strictEqual(yield* Store.get(form.ui.nameStore), "Ada");
@@ -938,65 +928,32 @@ describe("Unitflow", () => {
     const store = Store.make(0);
     const event = Event.make<number>();
     const combinedStore = Store.combine([store], (count) => count * 2);
-    const storeSink: Store.Sink<number> = store;
+    const storeSink: Store.Input<number> = store;
 
     const valid: Model.Shape = {
-      inputs: { event, store },
+      inputs: { event },
       outputs: { store, combinedStore },
       ui: { store, event, combinedStore },
     };
 
-    // @ts-expect-error inputs accept only sink-capable ports — a combined store is read-only
-    const sourceAsInput: Model.Shape = { inputs: { combinedStore }, outputs: {}, ui: {} };
-    // @ts-expect-error outputs accept only source-capable ports — a bare sink cannot be read
-    const sinkAsOutput: Model.Shape = { inputs: {}, outputs: { storeSink }, ui: {} };
-    // @ts-expect-error ui accepts only source-capable ports or nested units
-    const sinkAsUi: Model.Shape = { inputs: {}, outputs: {}, ui: { storeSink } };
+    // @ts-expect-error inputs accept only event inputs — a combined store is read-only
+    const outputAsInput: Model.Shape = { inputs: { combinedStore }, outputs: {}, ui: {} };
+    // @ts-expect-error a Store never belongs in inputs — a live value is a construction argument
+    const storeAsInput: Model.Shape = { inputs: { store }, outputs: {}, ui: {} };
+    // @ts-expect-error outputs accept only output-capable ports — a bare input cannot be read
+    const inputAsOutput: Model.Shape = { inputs: {}, outputs: { storeSink }, ui: {} };
+    // @ts-expect-error ui accepts only output-capable ports or nested units
+    const inputAsUi: Model.Shape = { inputs: {}, outputs: {}, ui: { storeSink } };
     // @ts-expect-error plain data is not a port
     const dataAsOutput: Model.Shape = { inputs: {}, outputs: { count: 1 }, ui: {} };
 
     assert.isDefined(valid);
-    assert.isDefined(sourceAsInput);
-    assert.isDefined(sinkAsOutput);
-    assert.isDefined(sinkAsUi);
+    assert.isDefined(outputAsInput);
+    assert.isDefined(storeAsInput);
+    assert.isDefined(inputAsOutput);
+    assert.isDefined(inputAsUi);
     assert.isDefined(dataAsOutput);
   });
-
-  it("Store.input is read-only for the owning model, write-only for everyone else (type-level)", () => {
-    const user = Store.input("");
-    // @ts-expect-error the owning model can only read its own input, never set it
-    const invalidSelfSet = Store.set(user, "ada");
-    const validSelfRead = Store.get(user);
-
-    const valid: Model.Shape = { inputs: { user }, outputs: {}, ui: { user } };
-
-    // a Combined store still isn't a valid input — it has nothing backing a
-    // `set`, unlike a genuine Store.input().
-    const combined = Store.combine([user], (value) => value.length);
-    // @ts-expect-error a combined store is read-only and not a Store.input()
-    const combinedAsInput: Model.Shape = { inputs: { combined }, outputs: {}, ui: {} };
-
-    const check = (ports: Model.PortsOf<typeof InputPortModel>) => {
-      // @ts-expect-error inputs are write-only externally — `get` needs a Source
-      const invalidExternalGet = Store.get(ports.inputs.user);
-      const validExternalSet = Store.set(ports.inputs.user, "ada");
-      return { invalidExternalGet, validExternalSet };
-    };
-
-    return { invalidSelfSet, validSelfRead, valid, combined, combinedAsInput, check };
-  });
-
-  it.effect("Store.input forwards from outside into the owning model's own read", () =>
-    Effect.gen(function* () {
-      const ports = yield* Model.get(InputPortModel);
-
-      assert.strictEqual(yield* Store.get(ports.ui.user), "");
-
-      yield* Store.set(ports.inputs.user, "ada");
-
-      assert.strictEqual(yield* Store.get(ports.ui.user), "ada");
-    }).pipe(Effect.provide(InputPortModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
-  );
 
   it.effect("exposes extra sections to resolvers as observation surfaces", () =>
     Effect.gen(function* () {
@@ -1040,7 +997,7 @@ describe("Unitflow", () => {
 
   it("constrains extra sections to source-capable ports (type-level)", () => {
     const store = Store.make(0);
-    const storeSink: Store.Sink<number> = store;
+    const storeSink: Store.Input<number> = store;
 
     class SinkExtraModel extends Model.Service<SinkExtraModel>()(
       "/test/test/SinkExtraModel",

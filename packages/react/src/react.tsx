@@ -14,7 +14,7 @@ const useUnitflowRuntime = (): UnitflowRuntime<any, any> => {
 };
 
 /** Subscribe to a store's current value. */
-export const useStore = <A,>(store: Store.Source<A>): A => {
+export const useStore = <A,>(store: Store.Output<A>): A => {
   const runtime = useUnitflowRuntime();
   const subscribe = React.useCallback(
     (listener: () => void) => runtime.subscribeStore(store, listener),
@@ -25,12 +25,31 @@ export const useStore = <A,>(store: Store.Source<A>): A => {
 };
 
 /** A stable callback that emits the event through the runtime. */
-export const useEvent = <A,>(event: Event.Sink<A>): ((...args: Event.EmitArgs<A>) => void) => {
+export const useEvent = <A,>(event: Event.Input<A>): ((...args: Event.EmitArgs<A>) => void) => {
   const runtime = useUnitflowRuntime();
   return React.useCallback(
     (...args: Event.EmitArgs<A>) => runtime.emit(event, ...args),
     [runtime, event],
   );
+};
+
+/** Leases ANY model by key and re-renders on its construction state —
+ * `Building` while `make` (or a layer it needs) is still resolving,
+ * `Ready` once leased, `Failed` on a construction error. One lease per
+ * mounted call, released on unmount (idle TTL keeps the instance alive
+ * across quick remounts) — see `subscribeModel` in `@unitflow/core/runtime`.
+ * `useRootUnit` below is this with the root's fixed `void` key. */
+export const useModel = <M extends Model.AnyService>(
+  model: M,
+  key: Model.KeyOf<M>,
+): ModelResult<Model.PortsOf<M>, Model.ErrorOf<M>> => {
+  const runtime = useUnitflowRuntime();
+  const subscribe = React.useCallback(
+    (listener: () => void) => runtime.subscribeModel(model, key, listener),
+    [runtime, model, key],
+  );
+  const getSnapshot = React.useCallback(() => runtime.getModel(model, key), [runtime, model, key]);
+  return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 };
 
 /** Leases the root model and re-renders on its construction state. */
@@ -99,13 +118,13 @@ export interface ViewProps<M extends Model.AnyService> {
   readonly unit: Model.PortsOf<M>;
 }
 
-/** A `ui` record bound for rendering: store sources arrive as their current
- * values, event sinks as fire callbacks, everything else (nested child units)
- * untouched. */
+/** A `ui` record bound for rendering: store outputs arrive as their current
+ * values, event inputs as fire callbacks, everything else (nested child
+ * units) untouched. */
 export type BoundUi<Ui> = {
-  readonly [K in keyof Ui]: Ui[K] extends Store.Source<infer A>
+  readonly [K in keyof Ui]: Ui[K] extends Store.Output<infer A>
     ? A
-    : Ui[K] extends Event.Sink<infer A>
+    : Ui[K] extends Event.Input<infer A>
       ? (...args: Event.EmitArgs<A>) => void
       : Ui[K];
 };
@@ -123,34 +142,47 @@ const boundId = (unit: object): number => {
   return id;
 };
 
+/** Binds a raw `ui` record for rendering: store outputs become their
+ * current (reactive) values, event inputs become fire callbacks, everything
+ * else passes through unchanged — one hook per entry, so `ui`'s KEY SET
+ * must stay the same across renders for one call site (true for a model's
+ * own `ui` shape, fixed per model class). What `View.make`'s `Bound`
+ * component uses internally; exported so other renderers (e.g. the
+ * router's `routeView`) can bind a `ui` record the same way without
+ * duplicating the per-entry hook logic. */
+export const useBoundUi = <Ui extends Record<string, unknown>>(ui: Ui): BoundUi<Ui> => {
+  const units: Record<string, unknown> = {};
+  for (const [key, port] of Object.entries(ui)) {
+    if (Store.isStore(port)) {
+      units[key] = useStore(port);
+    } else if (Event.isEvent(port) && "~sink" in port) {
+      units[key] = useEvent(port);
+    } else {
+      units[key] = port;
+    }
+  }
+  // Built entry by entry from the same record the mapped type describes.
+  // eslint-disable-next-line revizo/no-type-assertion
+  return units as BoundUi<Ui>;
+};
+
 const makeView = <M extends Model.Viewable, P extends object = Record<never, never>>(
   model: M,
   render: (units: BoundUi<Model.PortsOf<M>["ui"]>, props: P) => React.ReactNode,
 ): React.FC<ViewProps<M> & P> & { readonly model: M } => {
   // Keyed by the ports object, so a Bound instance always sees one and the
-  // same ui record: it is created once in `make` and never mutated, hence the
-  // per-entry hooks below keep a fixed order for the component's lifetime.
+  // same ui record: it is created once in `make` and never mutated, hence
+  // `useBoundUi`'s per-entry hooks keep a fixed order for the component's
+  // lifetime.
   const Bound = ({
     ui,
     extra,
   }: {
     readonly ui: Record<string, unknown>;
     readonly extra: P;
-  }): React.ReactNode => {
-    const units: Record<string, unknown> = {};
-    for (const [key, port] of Object.entries(ui)) {
-      if (Store.isStore(port)) {
-        units[key] = useStore(port);
-      } else if (Event.isEvent(port) && "~sink" in port) {
-        units[key] = useEvent(port);
-      } else {
-        units[key] = port;
-      }
-    }
-    // Built entry by entry from the same record the mapped type describes.
+  }): React.ReactNode =>
     // eslint-disable-next-line revizo/no-type-assertion
-    return render(units as BoundUi<Model.PortsOf<M>["ui"]>, extra);
-  };
+    render(useBoundUi(ui) as BoundUi<Model.PortsOf<M>["ui"]>, extra);
 
   const Component = (props: ViewProps<M> & P): React.ReactNode => {
     const { unit, ...extra } = props;
@@ -166,8 +198,8 @@ const makeView = <M extends Model.Viewable, P extends object = Record<never, nev
 /**
  * Pairs a model with its View: a pure projection of the unit it receives.
  * The render callback gets the model's `ui` already bound as `units`: store
- * sources arrive as current values, event sinks as fire callbacks, and nested
- * child units pass through unchanged. No hooks needed in the callback — and
+ * outputs arrive as current values, event inputs as fire callbacks, and
+ * nested child units pass through unchanged. No hooks needed in the callback — and
  * `inputs`/`outputs` stay invisible to JSX.
  */
 export const View = { make: makeView };

@@ -9,27 +9,12 @@ import { describe, expectTypeOf, it } from "vitest";
 import * as Effect from "effect/Effect";
 import { Event, Model, Registry, Store } from "../src/index.js";
 
-describe("Store.input / Store.toInput", () => {
-  it("input() returns an InputSource, not a full Store", () => {
-    const user = Store.input("");
-    expectTypeOf(user).toEqualTypeOf<Store.InputSource<string>>();
-    expectTypeOf(user).not.toMatchTypeOf<Store.Store<string>>();
-    // Source capability (read) is intact.
-    expectTypeOf(user).toMatchTypeOf<Store.Source<string>>();
-  });
-
-  it("toInput() narrows an existing Store to InputSource, same A", () => {
-    const full = Store.make(0);
-    expectTypeOf(Store.toInput(full)).toEqualTypeOf<Store.InputSource<number>>();
-  });
-});
-
 describe("Event.input / Event.toInput", () => {
   it("input() returns an InputSource, not a full Event", () => {
     const submit = Event.input<string>();
     expectTypeOf(submit).toEqualTypeOf<Event.InputSource<string>>();
     expectTypeOf(submit).not.toMatchTypeOf<Event.Event<string>>();
-    expectTypeOf(submit).toMatchTypeOf<Event.Source<string>>();
+    expectTypeOf(submit).toMatchTypeOf<Event.Output<string>>();
   });
 
   it("toInput() narrows an existing Event to InputSource, same A", () => {
@@ -42,29 +27,53 @@ describe("Model.PortsOf narrowing", () => {
   class PortModel extends Model.Service<PortModel>()("types-test/PortModel")({
     make: () =>
       Effect.gen(function* () {
-        const user = Store.input("");
+        const submit = Event.input<string>();
         const count = Store.make(0);
         return {
-          inputs: { user },
+          inputs: { submit },
           outputs: { count },
           ui: { count },
         };
       }),
   }) {}
 
-  it("inputs are Sink-only to everyone but the owning model", () => {
-    expectTypeOf<Model.PortsOf<typeof PortModel>["inputs"]["user"]>().toEqualTypeOf<
-      Store.Sink<string>
+  it("inputs are Input-only to everyone but the owning model", () => {
+    expectTypeOf<Model.PortsOf<typeof PortModel>["inputs"]["submit"]>().toEqualTypeOf<
+      Event.Input<string>
     >();
   });
 
-  it("outputs/ui are Source-only externally", () => {
+  it("outputs/ui are Output-only externally", () => {
     expectTypeOf<Model.PortsOf<typeof PortModel>["outputs"]["count"]>().toEqualTypeOf<
-      Store.Source<number>
+      Store.Output<number>
     >();
     expectTypeOf<Model.PortsOf<typeof PortModel>["ui"]["count"]>().toEqualTypeOf<
-      Store.Source<number>
+      Store.Output<number>
     >();
+  });
+});
+
+describe("Model.Keyed<Key>", () => {
+  class UserKeyedModel extends Model.Service<UserKeyedModel>()(
+    "types-test/UserKeyedModel",
+  )<Store.Output<string>>()({
+    make: (user) =>
+      Effect.gen(function* () {
+        void user;
+        return { inputs: {}, outputs: {}, ui: {} };
+      }),
+  }) {}
+
+  class PlainSingleton extends Model.Service<PlainSingleton>()("types-test/PlainSingleton")({
+    make: () => Effect.gen(function* () {
+      return { inputs: {}, outputs: {}, ui: {} };
+    }),
+  }) {}
+
+  it("accepts a model keyed by exactly Key, rejects a singleton or a mismatched key", () => {
+    expectTypeOf(UserKeyedModel).toMatchTypeOf<Model.Keyed<Store.Output<string>>>();
+    expectTypeOf(PlainSingleton).not.toMatchTypeOf<Model.Keyed<Store.Output<string>>>();
+    expectTypeOf(UserKeyedModel).not.toMatchTypeOf<Model.Keyed<Store.Output<number>>>();
   });
 });
 
