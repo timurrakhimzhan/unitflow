@@ -7,6 +7,16 @@ Use `Query` for async reads that belong to a model and need visible state.
 The handler is a normal Effect, so it can use layers, typed errors, retry,
 timeout, schedules, schemas, and any other Effect service.
 
+`Query.make` only runs inside a model's own `make()` — it forks an ongoing
+pipeline (refetch on dependency change, `refresh`, staleness), and that
+pipeline needs a real owner to dispose it. Calling it anywhere else (a
+router middleware, a bare top-level Effect) fails to compile: the
+requirement it needs, `InstanceScope`, is only ever injected dynamically by
+a model's own construction, never available as an ordinary layer you could
+compose in. A guard that needs a `Query`-backed value should lease a keyed
+model that owns it (`Model.get(SomeQueryModel, key)`) rather than calling
+`Query.make` directly — see [Router: Middleware](/router/middleware/#getting-provides-into-a-page-model).
+
 A query owns:
 
 ```ts

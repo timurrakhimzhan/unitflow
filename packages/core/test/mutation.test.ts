@@ -5,13 +5,18 @@ import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
-import { Event, Model, Registry, Store } from "../src/index.js";
+import { Event, InstanceScope, Model, Registry, Store } from "../src/index.js";
 import * as Mutation from "../src/mutation.js";
 import * as Query from "../src/query.js";
+
+/** `Mutation.make`/`invalidates` fork ongoing pipelines — these tests
+ * exercise them standalone, outside any model. */
+const testRegistry = Layer.mergeAll(Registry.layer, InstanceScope.root);
 
 type BoundUi<Ui> = {
   readonly [K in keyof Ui]: Ui[K] extends Store.Output<infer A>
@@ -39,7 +44,7 @@ describe("Mutation", () => {
       const mutation = yield* Mutation.make((input: number) => Effect.succeed(input * 2));
       const result = yield* Mutation.call(mutation.run, 21);
       assert.strictEqual(result, 42);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("call surfaces the handler's typed failure instead of hanging", () =>
@@ -55,7 +60,7 @@ describe("Mutation", () => {
 
       const state = yield* Store.get(mutation.state);
       assert.isTrue(AsyncResult.isFailure(state));
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("two concurrent calls are serialized and each receive their own result", () =>
@@ -82,7 +87,7 @@ describe("Mutation", () => {
       assert.strictEqual(yield* Fiber.join(firstFiber), 10);
       assert.strictEqual(yield* Fiber.join(secondFiber), 20);
       assert.strictEqual(maxActive, 1);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("call runs with the owner's services, not the caller's", () =>
@@ -100,7 +105,7 @@ describe("Mutation", () => {
 
       const result = yield* Mutation.call(mutation.run, "x");
       assert.strictEqual(result, "owner:x");
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("Event.emit fire-and-forget still runs the handler, state, and done", () =>
@@ -117,7 +122,7 @@ describe("Mutation", () => {
       const state = yield* Store.get(mutation.state);
       assert.isTrue(AsyncResult.isSuccess(state));
       assert.deepStrictEqual(AsyncResult.value(state), Option.some(6));
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("invalidates emits every target's refresh after a successful run", () =>
@@ -158,7 +163,7 @@ describe("Mutation", () => {
       assert.strictEqual(listCalls, 2);
 
       yield* Fiber.interrupt(refreshFiber);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("state is waiting while the handler runs", () =>
@@ -183,7 +188,7 @@ describe("Mutation", () => {
       yield* Deferred.succeed(gate, 9);
       assert.strictEqual(yield* Fiber.join(callFiber), 9);
       assert.isFalse(AsyncResult.isWaiting(yield* Store.get(mutation.state)));
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("call fails with TimeoutError when the run misses the timeout", () =>
@@ -198,7 +203,7 @@ describe("Mutation", () => {
       yield* TestClock.adjust("5 seconds");
       const failure = yield* Fiber.join(callFiber);
       assert.isTrue(Cause.isTimeoutError(failure));
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("works through a model's narrowed ports", () =>
@@ -229,7 +234,7 @@ describe("Mutation", () => {
         yield* Registry.allSettled(Event.emit(ports.inputs.save, { name: "Studio" }));
         assert.deepStrictEqual(yield* Fiber.join(savedFiber), { id: 1, name: "Studio" });
       }).pipe(Effect.provide(SaverModel.layer));
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it("keeps the sink's mutation type through NarrowInput and BoundUi (type-level)", () => {

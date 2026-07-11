@@ -10,11 +10,13 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import {
   completeCounted,
+  InstanceScope,
   isExpectedTermination,
   ownerScope,
   Registry,
   type RegistryService,
   releaseSubscription,
+  requiredOwnerScope,
   type SubscriptionTracker,
   trackedStream,
   trackPublish,
@@ -356,13 +358,14 @@ type ForwardInput<A> = Output<A> | Effect.Effect<Output<A>, any, any>;
 
 type ForwardResult<A, Arg extends ForwardInput<A>> =
   Arg extends Effect.Effect<infer E extends Output<A>, infer EffE, infer EffR>
-    ? Effect.Effect<E, EffE, EffR | Registry>
+    ? Effect.Effect<E, EffE, EffR | InstanceScope>
     : Arg extends Output<A>
-      ? Effect.Effect<Arg, never, Registry>
+      ? Effect.Effect<Arg, never, InstanceScope>
       : never;
 
 /** Subscribes to `source` and emits every occurrence into `input` — forked
- * into the enclosing model's scope, same lifetime as `Registry.run`.
+ * into the enclosing model's scope, same lifetime as `Registry.run`: only
+ * callable inside a model's own `make()` (see `InstanceScope`/`ownerScope`).
  * Data-last, and same dual-input shape as {@link handler}: pipe a plain
  * event/store or something that resolves to one, e.g.
  * `store.pipe(Store.changed, Event.forwardTo(input))`. Resolves to the
@@ -472,9 +475,9 @@ type HandlerInput<A> = Output<A> | Effect.Effect<Output<A>, any, any>;
 
 type HandlerResult<A, R, Arg extends HandlerInput<A>> =
   Arg extends Effect.Effect<infer E extends Output<A>, infer EffE, infer EffR>
-    ? Effect.Effect<E, EffE, EffR | R | Registry>
+    ? Effect.Effect<E, EffE, EffR | R | Registry | InstanceScope>
     : Arg extends Output<A>
-      ? Effect.Effect<Arg, never, R | Registry>
+      ? Effect.Effect<Arg, never, R | Registry | InstanceScope>
       : never;
 
 /**
@@ -559,10 +562,10 @@ export const handler =
   ): (<Arg extends HandlerInput<A>>(event: Arg) => HandlerResult<A, R, Arg>) => {
     // Setter sources are store-backed: their handler pipeline is the store
     // stream, unchanged. Plain events take the direct dispatch path.
-    const attachStream = (source: Output<A>): Effect.Effect<void, never, R | Registry> =>
+    const attachStream = (source: Output<A>): Effect.Effect<void, never, R | Registry | InstanceScope> =>
       options?.concurrency === "unbounded"
         ? Effect.gen(function* () {
-            const scope = yield* ownerScope;
+            const scope = yield* requiredOwnerScope;
             yield* Registry.run(
               stream(source).pipe(
                 Stream.mapEffect((value) =>
@@ -586,10 +589,10 @@ export const handler =
           })
         : Registry.run(stream(source).pipe(Stream.mapEffect(handle)));
 
-    const attachDirect = (source: Output<A>): Effect.Effect<void, never, R | Registry> =>
+    const attachDirect = (source: Output<A>): Effect.Effect<void, never, R | Registry | InstanceScope> =>
       Effect.gen(function* () {
         const registry = yield* Registry;
-        const scope = yield* ownerScope;
+        const scope = yield* requiredOwnerScope;
         // Materialize the channel exactly like the stream subscription would
         // have: pubsub ownership (who created it, whose scope shuts it down)
         // must not depend on the dispatch mechanism.
@@ -620,7 +623,7 @@ export const handler =
         );
       });
 
-    const attachSource = (source: Output<A>): Effect.Effect<void, never, R | Registry> => {
+    const attachSource = (source: Output<A>): Effect.Effect<void, never, R | Registry | InstanceScope> => {
       if (isCombined(source)) {
         return Effect.forEach(
           sourcesOf(source),

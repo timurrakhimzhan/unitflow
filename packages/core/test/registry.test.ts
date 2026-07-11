@@ -3,7 +3,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import { Event, Model, Registry, Store } from "../src/index.js";
+import { Event, InstanceScope, Model, Registry, Store } from "../src/index.js";
+
+/** `Registry.run` forks an ongoing pipeline — most of these tests exercise
+ * it standalone, outside any model. */
+const testRegistry = Layer.mergeAll(Registry.layer, InstanceScope.root);
 
 class CascadeModel extends Model.Service<CascadeModel>()(
   "/test/registry-test/CascadeModel",
@@ -47,7 +51,7 @@ describe("Registry.allSettled", () => {
       yield* Registry.allSettled(Event.emit(increment, 3));
 
       assert.strictEqual(yield* Store.get(count), 3);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("settles a three-pipeline cascade to its tail", () =>
@@ -57,7 +61,7 @@ describe("Registry.allSettled", () => {
       yield* Registry.allSettled(Event.emit(model.inputs.first, 4));
 
       assert.strictEqual(yield* Store.get(model.outputs.result), 50);
-    }).pipe(Effect.provide(CascadeModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
+    }).pipe(Effect.provide(CascadeModel.layer.pipe(Layer.provideMerge(testRegistry)))),
   );
 
   it.effect("runs standalone-primitive triggers sequentially, then settles", () =>
@@ -76,7 +80,7 @@ describe("Registry.allSettled", () => {
 
       assert.strictEqual(yield* Store.get(doubled), 6);
       assert.strictEqual(yield* Store.get(label), "x");
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("keeps waiting while a handler is parked on a gate", () =>
@@ -107,14 +111,14 @@ describe("Registry.allSettled", () => {
       yield* Deferred.succeed(gate, undefined);
       yield* Deferred.await(settled);
       assert.isTrue(yield* Store.get(done));
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("resolves immediately on an empty registry", () =>
     Effect.gen(function* () {
       yield* Registry.allSettled();
       assert.isTrue(true);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("isolates registries: another registry's backlog does not block", () =>
@@ -139,7 +143,7 @@ describe("Registry.allSettled", () => {
 
       yield* Deferred.succeed(gate, undefined);
       yield* Deferred.await(outerSettled);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("treats store replay as already settled and keeps counting sound", () =>
@@ -164,7 +168,7 @@ describe("Registry.allSettled", () => {
       // A second settle on the now-idle registry resolves immediately.
       yield* Registry.allSettled();
       assert.strictEqual(yield* Store.get(source), 4);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("started mid-cascade, still waits for the cascade's tail", () =>
@@ -204,6 +208,6 @@ describe("Registry.allSettled", () => {
       yield* Deferred.succeed(gate, undefined);
       yield* Deferred.await(settled);
       assert.strictEqual(yield* Store.get(result), 20);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 });

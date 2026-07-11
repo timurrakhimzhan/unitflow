@@ -1,6 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { Event, Registry, Store } from "../src/index.js";
+import * as Layer from "effect/Layer";
+import { Event, InstanceScope, Registry, Store } from "../src/index.js";
+
+/** `forwardTo`/`Event.handler` fork ongoing pipelines — these tests exercise
+ * them standalone, outside any model. */
+const testRegistry = Layer.mergeAll(Registry.layer, InstanceScope.root);
 
 describe("Store.forwardTo", () => {
   it.effect("writes every source emission into the sink", () =>
@@ -15,7 +20,7 @@ describe("Store.forwardTo", () => {
 
       yield* Registry.allSettled(Store.set(source, 2));
       assert.strictEqual(yield* Store.get(sink), 2);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("Registry.allSettled waits for the forwarded write, not just the source's", () =>
@@ -39,7 +44,7 @@ describe("Store.forwardTo", () => {
       // If allSettled only waited for `source`'s own subscribers and not the
       // forwarded write's cascade into `sink`, this would still be empty.
       assert.deepStrictEqual(seenAtSink, [5]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 });
 
@@ -62,7 +67,7 @@ describe("Event.forwardTo", () => {
       yield* Registry.allSettled(Event.emit(source, 1), Event.emit(source, 2));
 
       assert.deepStrictEqual(seen, [1, 2]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("accepts an Effect-producing source, e.g. Store.changed", () =>
@@ -84,6 +89,6 @@ describe("Event.forwardTo", () => {
       yield* Registry.allSettled(Store.set(count, 1), Store.set(count, 2));
 
       assert.deepStrictEqual(seen, [1, 2]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 });

@@ -7,7 +7,7 @@
  */
 import { describe, expectTypeOf, it } from "vitest";
 import * as Effect from "effect/Effect";
-import { Event, Model, Registry, Store } from "../src/index.js";
+import { Event, InstanceScope, Model, Registry, Store } from "../src/index.js";
 
 describe("Event.input / Event.toInput", () => {
   it("input() returns an InputSource, not a full Event", () => {
@@ -78,21 +78,21 @@ describe("Model.Keyed<Key>", () => {
 });
 
 describe("Store.forwardTo / Event.forwardTo result type", () => {
-  it("resolves a plain source to Effect<Source, never, Registry>", () => {
+  it("resolves a plain source to Effect<Source, never, InstanceScope>", () => {
     const sink = Store.make(0);
     const source = Store.make(0);
     expectTypeOf(source.pipe(Store.forwardTo(sink))).toEqualTypeOf<
-      Effect.Effect<Store.Store<number>, never, Registry>
+      Effect.Effect<Store.Store<number>, never, InstanceScope>
     >();
   });
 
   it("resolves an Effect-producing source, widening R with the source's own requirements", () => {
     const sink = Event.make<number>();
     const count = Store.make(0);
-    // Store.changed: Effect<Event<A>, never, Registry> — forwardTo must
-    // preserve that error/requirement shape, not erase it to `never`/`Registry`.
+    // Store.changed: Effect<Event<A>, never, Registry | InstanceScope> —
+    // forwardTo must preserve that error/requirement shape, not erase it.
     expectTypeOf(count.pipe(Store.changed, Event.forwardTo(sink))).toEqualTypeOf<
-      Effect.Effect<Event.Event<number>, never, Registry>
+      Effect.Effect<Event.Event<number>, never, Registry | InstanceScope>
     >();
   });
 });

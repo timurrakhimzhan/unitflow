@@ -8,7 +8,7 @@ import type * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Event from "./event.js";
 import { makeSlot, type PersistOptions } from "./persistence.js";
-import { Registry } from "./registry.js";
+import { InstanceScope, Registry } from "./registry.js";
 import * as Store from "./store.js";
 
 /**
@@ -127,7 +127,7 @@ const depValues = <Deps extends Record<string, Store.Output<any>>>(
 const base = <Deps extends Record<string, Store.Output<any>>, A, E, R>(
   stores: Deps,
   request: (deps: DepValues<Deps>) => Effect.Effect<A, E, R>,
-): Effect.Effect<Query<A, E, Deps>, never, R | Registry> =>
+): Effect.Effect<Query<A, E, Deps>, never, R | Registry | InstanceScope> =>
   Effect.gen(function* () {
     const state = Store.make<AsyncResult.AsyncResult<A, E>>(AsyncResult.initial(true));
 
@@ -171,7 +171,7 @@ export const makeInfinite = <
   R,
 >(
   options: InfiniteOptions<Deps, Item, Cursor, E, R>,
-): Effect.Effect<Paginated<Item, E, Deps>, never, R | Registry> =>
+): Effect.Effect<Paginated<Item, E, Deps>, never, R | Registry | InstanceScope> =>
   Effect.gen(function* () {
     const stores = (options.stores ?? {}) as Deps;
     // `None` means exhausted or nothing loaded yet. Updated only on
@@ -227,10 +227,10 @@ export const makeInfinite = <
 
 export function make<A, E, R>(
   request: Effect.Effect<A, E, R>,
-): Effect.Effect<Query<A, E>, never, R | Registry>;
+): Effect.Effect<Query<A, E>, never, R | Registry | InstanceScope>;
 export function make<Deps extends Record<string, Store.Output<any>>, A, E, R>(
   options: MakeOptions<Deps, A, E, R>,
-): Effect.Effect<Query<A, E, Deps>, never, R | Registry>;
+): Effect.Effect<Query<A, E, Deps>, never, R | Registry | InstanceScope>;
 export function make(
   requestOrOptions:
     | Effect.Effect<any, any, any>
@@ -247,7 +247,7 @@ export const refetchOn =
   (...sources: ReadonlyArray<Event.Output<any>>) =>
   <R extends Query<any, any, any>, E, Req>(
     self: Effect.Effect<R, E, Req>,
-  ): Effect.Effect<R, E, Req | Registry> =>
+  ): Effect.Effect<R, E, Req | Registry | InstanceScope> =>
     Effect.tap(self, (query) =>
       Effect.forEach(
         sources,
@@ -272,7 +272,7 @@ export const persist =
   <A, I>(options: PersistOptions<A, I>) =>
   <Q extends Query<A, any, any>, Req>(
     self: Effect.Effect<Q, never, Req>,
-  ): Effect.Effect<Q, never, Req | KeyValueStore.KeyValueStore | Registry> =>
+  ): Effect.Effect<Q, never, Req | KeyValueStore.KeyValueStore | Registry | InstanceScope> =>
     Effect.tap(self, (query) =>
       Effect.gen(function* () {
         const slot = yield* makeSlot(options);
@@ -313,7 +313,7 @@ export const repeat =
   <Out, SR>(schedule: Schedule.Schedule<Out, unknown, never, SR>) =>
   <R extends Query<any, any, any>, E, Req>(
     self: Effect.Effect<R, E, Req>,
-  ): Effect.Effect<R, E, Req | SR | Registry> =>
+  ): Effect.Effect<R, E, Req | SR | Registry | InstanceScope> =>
     Effect.tap(self, (query) =>
       Registry.run(
         Stream.fromSchedule(schedule).pipe(Stream.mapEffect(() => Event.emit(query.refresh))),

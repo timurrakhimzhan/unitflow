@@ -2,7 +2,12 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { Event, Registry, Store } from "../src/index.js";
+import * as Layer from "effect/Layer";
+import { Event, InstanceScope, Registry, Store } from "../src/index.js";
+
+/** `Store.changed`/`Event.handler` fork ongoing pipelines — these tests
+ * exercise them standalone, outside any model. */
+const testRegistry = Layer.mergeAll(Registry.layer, InstanceScope.root);
 
 describe("Store.changed", () => {
   it.effect("emits subsequent store values and skips the current replay", () =>
@@ -24,7 +29,7 @@ describe("Store.changed", () => {
       yield* Registry.allSettled(Store.set(count, 1), Store.set(count, 2));
 
       assert.deepStrictEqual(seen, [1, 2]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("returns a pipeable event", () =>
@@ -40,7 +45,7 @@ describe("Store.changed", () => {
       yield* Registry.allSettled(Store.set(count, 21));
 
       assert.strictEqual(yield* Store.get(doubled), 42);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("can pipe directly into Event.handler", () =>
@@ -56,7 +61,7 @@ describe("Store.changed", () => {
       yield* Registry.allSettled(Store.set(count, 7));
 
       assert.strictEqual(yield* Store.get(tripled), 21);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("can be consumed with Event.waitFor", () =>
@@ -75,7 +80,7 @@ describe("Store.changed", () => {
       yield* Registry.allSettled(Store.set(count, 2));
 
       assert.strictEqual(yield* Fiber.join(nextEven), 2);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("works for derived stores", () =>
@@ -98,6 +103,6 @@ describe("Store.changed", () => {
       yield* Registry.allSettled(Store.set(count, 4));
 
       assert.deepStrictEqual(seen, [1, 0]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 });

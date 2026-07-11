@@ -301,15 +301,17 @@ export class Registry extends Context.Service<Registry, RegistryService>()(
     }),
   );
 
-  /** Fork a pipeline into the enclosing model instance's scope (the registry
-   * scope outside a model). The stream's error channel must be `never` —
-   * handle failures inside the pipeline. Defects still kill only this
-   * pipeline and are logged; they never fail `run` itself. */
+  /** Fork a pipeline into the enclosing model instance's scope — see
+   * {@link requiredOwnerScope}: this only runs inside a model's own
+   * `make()` (or wherever `InstanceScope.root` was explicitly provided).
+   * The stream's error channel must be `never` — handle failures inside the
+   * pipeline. Defects still kill only this pipeline and are logged; they
+   * never fail `run` itself. */
   static readonly run = <A, R>(
     stream: Stream.Stream<A, never, R>,
-  ): Effect.Effect<void, never, R | Registry> =>
+  ): Effect.Effect<void, never, R | InstanceScope> =>
     Effect.gen(function* () {
-      const scope = yield* ownerScope;
+      const scope = yield* requiredOwnerScope;
       yield* Effect.forkIn(
         Stream.runDrain(stream).pipe(
           Effect.onExit((exit) =>
@@ -351,15 +353,53 @@ export class Registry extends Context.Service<Registry, RegistryService>()(
  * The scope of the model instance currently being constructed. Stores and
  * events lazily materialized while it is in context register their cleanup
  * there, so disposing the instance also removes its registry entries.
+ *
+ * Deliberately never available as an ordinary composable `Layer` — `Model`'s
+ * own `construct()` is the ONLY place that injects it, dynamically, into
+ * one specific instance's context. That is what makes it a real capability
+ * boundary: anything that transitively requires `InstanceScope` (see
+ * {@link ownerScope}) cannot be satisfied just by composing more layers
+ * into an app — it has to actually be running inside a model's `make()`.
+ * {@link InstanceScope.root} is the one sanctioned exception, for tests and
+ * bootstrap code that legitimately construct reactive state outside any
+ * model.
  */
 export class InstanceScope extends Context.Service<InstanceScope, Scope.Scope>()(
   "@unitflow/core/InstanceScope",
-) {}
+) {
+  /** For tests and bootstrap code ONLY: binds `InstanceScope` to whatever
+   * scope this layer itself gets composed into — everything forked through
+   * it (`Registry.run`, `Query.make`, `Event.handler`, `Store.forwardTo`,
+   * `Event.forwardTo`) disposes when THAT scope closes, same as
+   * `Effect.scoped`'s own cleanup. Never reach for this inside a model's
+   * own `make()` — it already has a real `InstanceScope`, injected. */
+  static readonly root: Layer.Layer<InstanceScope> = Layer.effect(InstanceScope, Effect.scope);
+}
 
 /** The scope that owns resources created by the current fiber: the enclosing
- * model instance's scope when inside one, the registry scope otherwise. */
+ * model instance's scope when inside one, the registry scope otherwise.
+ * Deliberately lenient — used for ONE-TIME, idempotent bookkeeping (a
+ * `pubsub` channel materializes at most once per event/store, ever, then is
+ * cached in `registry.events`/`registry.stores`), which stays harmless even
+ * with no model around: falling back keeps `Store.get`/`set`/`stream` and
+ * `Event.emit` universally callable, from a View, a test, anywhere — they
+ * must never require `InstanceScope`. See {@link requiredOwnerScope} for
+ * the strict counterpart. */
 export const ownerScope: Effect.Effect<Scope.Scope, never, Registry> = Effect.gen(function* () {
   const registry = yield* Registry;
   const instance = yield* Effect.serviceOption(InstanceScope);
   return Option.getOrElse(instance, () => registry.scope);
 });
+
+/** The strict counterpart of {@link ownerScope}: no fallback. Reserved for
+ * code that forks ONGOING, repeated-invocation work — `Registry.run`
+ * itself, and everything built on it (`Query.make`, `Event.handler`,
+ * `Store.forwardTo`, `Event.forwardTo`, `Store.changed`) — where falling
+ * back to the registry's own app-lifetime scope means every repeated call
+ * (e.g. a router guard re-evaluated on every navigation) forks ANOTHER
+ * copy that never gets cleaned up. This can only be satisfied inside a
+ * model's own `make()` (or wherever `InstanceScope.root` was explicitly
+ * provided) — `InstanceScope` is never available as an ordinary composable
+ * `Layer`, so nothing can accidentally satisfy it: a compile error at the
+ * point that code's own layer gets composed, not a silent runtime leak. */
+export const requiredOwnerScope: Effect.Effect<Scope.Scope, never, InstanceScope> = InstanceScope;

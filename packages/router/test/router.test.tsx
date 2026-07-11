@@ -1000,4 +1000,99 @@ describe("@unitflow/router", () => {
       }).pipe(Effect.provide(testLayer), Effect.timeout("1 second"));
     });
   });
+
+  describe("a guard forking ongoing reactive work (InstanceScope)", () => {
+    it("Query.make() called directly inside a guard fails to compose (type-level)", () => {
+      class LeakyGuard extends Router.Middleware<LeakyGuard>()(
+        "/test/router/gate/Guard",
+      )<{ readonly count: number }>() {}
+
+      const LeakyGuardLive = LeakyGuard.layer(() =>
+        Effect.gen(function* () {
+          // A fresh Query.make() per navigation, forked with no owner tied to
+          // this specific navigation — see Query/Registry.run's docs on
+          // InstanceScope. Never do this; wrap it in a keyed model instead
+          // (below).
+          const q = yield* Query.make({ handler: () => Effect.succeed(1) });
+          return { count: q.state.initial._tag === "Initial" ? 0 : 1 };
+        }),
+      );
+
+      const GateRoute = Route.make("gate", { path: "/gate" });
+      const { model } = Router.make(
+        "/test/router/gate",
+        Route.group(GateRoute).middleware(LeakyGuard),
+      );
+
+      const testLayer = model.layer.pipe(
+        Layer.provideMerge(LeakyGuardLive),
+        Layer.provideMerge(testEnv()),
+      );
+
+      // @ts-expect-error LeakyGuardLive's Query.make() requires InstanceScope
+      // — never available composing a middleware into a runnable app, only
+      // inside a model's own make()
+      const run: Effect.Effect<void> = Effect.gen(function* () {
+        yield* Model.get(model);
+      }).pipe(Effect.provide(testLayer));
+      void run;
+    });
+
+    it.effect("the fix — wrap Query in a keyed model, lease it by identity from the guard", () => {
+      let fetchCount = 0;
+
+      class GatedListModel extends Model.Service<GatedListModel>()(
+        "/test/router/gate/GatedList",
+      )<string>()({
+        make: () =>
+          Effect.gen(function* () {
+            const q = yield* Query.make({
+              handler: () =>
+                Effect.sync(() => {
+                  fetchCount += 1;
+                  return fetchCount;
+                }),
+            });
+            yield* Store.waitFor(q.state, (s) => s._tag !== "Initial");
+            return { inputs: {}, outputs: { value: q.state }, ui: {} };
+          }),
+      }) {}
+
+      class SafeGuard extends Router.Middleware<SafeGuard>()(
+        "/test/router/gate/SafeGuard",
+      )<{ readonly count: number }>() {}
+
+      const SafeGuardLive = SafeGuard.layer(() =>
+        Effect.gen(function* () {
+          // Same key every time here — a real guard keys by whatever
+          // identity should determine "same fetch, reuse" (search, params).
+          const list = yield* Model.get(GatedListModel, "all");
+          return { count: yield* Store.get(list.outputs.value).pipe(Effect.map(() => fetchCount)) };
+        }),
+      );
+
+      const HomeRoute2 = Route.make("home2", { path: "/" });
+      const GateRoute2 = Route.make("gate2", { path: "/gate2" });
+      const { model } = Router.make(
+        "/test/router/gate2",
+        Route.group(HomeRoute2, GateRoute2).middleware(SafeGuard),
+      );
+
+      const testLayer = model.layer.pipe(
+        Layer.provideMerge(SafeGuardLive),
+        Layer.provideMerge(GatedListModel.layer),
+        Layer.provideMerge(testEnv()),
+      );
+
+      return Effect.gen(function* () {
+        const router = yield* Model.get(model);
+        for (let i = 0; i < 5; i++) {
+          yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/" }));
+          yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/gate2" }));
+        }
+        // Deduped by key across every re-navigation: fetched exactly once.
+        assert.strictEqual(fetchCount, 1);
+      }).pipe(Effect.provide(testLayer));
+    });
+  });
 });

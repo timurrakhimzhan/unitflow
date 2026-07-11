@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Event from "./event.js";
-import { Registry } from "./registry.js";
+import { InstanceScope, Registry } from "./registry.js";
 import * as Store from "./store.js";
 
 const MutationTypeId = Symbol.for("@unitflow/core/Mutation");
@@ -41,7 +41,7 @@ export interface Mutation<I, A, E> {
 
 export const make = <I, A, E, R>(
   handler: (input: I) => Effect.Effect<A, E, R>,
-): Effect.Effect<Mutation<I, A, E>, never, R | Registry> =>
+): Effect.Effect<Mutation<I, A, E>, never, R | Registry | InstanceScope> =>
   Effect.gen(function* () {
     // The executor bakes the construction context in: `call` from any caller
     // runs with the owner's services and registry, so the mutation's `R`
@@ -102,7 +102,7 @@ export const invalidates =
   (...targets: ReadonlyArray<{ readonly refresh: Event.Input<void> }>) =>
   <I, A, E, EffE, R>(
     self: Effect.Effect<Mutation<I, A, E>, EffE, R>,
-  ): Effect.Effect<Mutation<I, A, E>, EffE, R | Registry> =>
+  ): Effect.Effect<Mutation<I, A, E>, EffE, R | Registry | InstanceScope> =>
     Effect.tap(self, (mutation) =>
       mutation.done.pipe(
         Event.handler(() =>

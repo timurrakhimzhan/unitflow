@@ -18,6 +18,7 @@ import {
   Registry,
   type RegistryService,
   releaseSubscription,
+  requiredOwnerScope,
   type SubscriptionTracker,
   trackedStream,
   trackPublish,
@@ -680,13 +681,14 @@ type ForwardInput<A> = Output<A> | Effect.Effect<Output<A>, any, any>;
 
 type ForwardResult<A, Arg extends ForwardInput<A>> =
   Arg extends Effect.Effect<infer E extends Output<A>, infer EffE, infer EffR>
-    ? Effect.Effect<E, EffE, EffR | Registry>
+    ? Effect.Effect<E, EffE, EffR | InstanceScope>
     : Arg extends Output<A>
-      ? Effect.Effect<Arg, never, Registry>
+      ? Effect.Effect<Arg, never, InstanceScope>
       : never;
 
 /** Subscribes to `source` and writes every emission into `input` — forked
- * into the enclosing model's scope, same lifetime as `Registry.run`.
+ * into the enclosing model's scope, same lifetime as `Registry.run`: only
+ * callable inside a model's own `make()` (see `InstanceScope`/`ownerScope`).
  * Data-last, and accepts either a plain source or something that resolves
  * to one, e.g. `store.pipe(Store.persist(...), Store.forwardTo(input))`.
  * Resolves to the source, so the pipe can keep going. */
@@ -716,7 +718,7 @@ const uniqueSources = (
 export const changed = <A>(
   store: Output<A>,
   options?: Pick<Event.Options, "name">,
-): Effect.Effect<Event.Event<A>, never, Registry> =>
+): Effect.Effect<Event.Event<A>, never, Registry | InstanceScope> =>
   Effect.gen(function* () {
     const changedEvent = Event.make<A>(
       options?.name !== undefined
@@ -754,7 +756,7 @@ export const changed = <A>(
     }
 
     const registry = yield* Registry;
-    const scope = yield* ownerScope;
+    const scope = yield* requiredOwnerScope;
     // The event channel binds to the declaring scope now — the same owner the
     // watcher pipeline's subscription would have bound it to.
     const channel = yield* Event.pubsub(changedEvent);
@@ -912,7 +914,7 @@ export function waitFor(
  */
 export const persist =
   <A, I>(options: PersistOptions<A, I>) =>
-  (self: Store<A>): Effect.Effect<Store<A>, never, KeyValueStore.KeyValueStore | Registry> =>
+  (self: Store<A>): Effect.Effect<Store<A>, never, KeyValueStore.KeyValueStore | Registry | InstanceScope> =>
     Effect.gen(function* () {
       const slot = yield* makeSlot(options);
 

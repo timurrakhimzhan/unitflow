@@ -4,10 +4,12 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
-import { Registry, Store } from "../src/index.js";
+import { InstanceScope, Registry, Store } from "../src/index.js";
 import * as Query from "../src/query.js";
 
-const layer = Layer.mergeAll(Registry.layer, KeyValueStore.layerMemory);
+/** `Store.persist`/`Query.make` fork ongoing pipelines — these tests
+ * exercise them standalone, outside any model. */
+const layer = Layer.mergeAll(Registry.layer, InstanceScope.root, KeyValueStore.layerMemory);
 
 /** Waits until the background save pipeline lands in the KVS. */
 const waitForSaved = (key: string) =>

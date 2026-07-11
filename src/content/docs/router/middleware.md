@@ -187,3 +187,48 @@ the wrong type, wired into the wrong route id, fails to compile at the
 `RouterView.make({ routes: {...} })` call site, the same way a mismatched
 `inputs` field used to. This is also how a future loader would plug in: as
 a middleware that provides the fetched data, arriving as the model's key.
+
+## Don't Fetch Reactively Inside a Guard
+
+A guard re-runs its handler on every navigation into the route it guards —
+there is no per-route-id caching the way a model instance has. Calling
+`Query.make` (or `Registry.run`, `Event.handler`, `Store.forwardTo`,
+`Event.forwardTo`) directly inside a guard forks a fresh, ongoing pipeline
+on every single navigation, and none of the earlier ones ever get cleaned
+up — a real, unbounded leak on a frequently-revisited route. The library
+catches this at compile time: those all require `InstanceScope`, which is
+only ever injected inside a model's own `make()`, never available composing
+a guard's layer into an app.
+
+Lease a keyed model that owns the `Query` instead, by whatever identity
+should decide "same fetch, reuse" versus "different fetch, refetch" (a
+decoded search param, in a real guard — this example fixes the key):
+
+```ts
+class UsersListModel extends Model.Service<UsersListModel>()(
+  "docs/UsersList",
+)<string>()({
+  make: (search) =>
+    Effect.gen(function* () {
+      const q = yield* Query.make({ handler: () => fetchUsers(search) });
+      return { inputs: {}, outputs: { users: q.state }, ui: {} };
+    }),
+}) {}
+
+class UsersGuard extends Router.Middleware<UsersGuard>()("docs/UsersGuard")<{
+  readonly users: Store.Output<AsyncResult.AsyncResult<ReadonlyArray<User>, never>>;
+}>() {}
+
+const UsersGuardLive = UsersGuard.layer(() =>
+  Effect.gen(function* () {
+    const list = yield* Model.get(UsersListModel, "all");
+    return { users: list.outputs.users };
+  }),
+);
+```
+
+`Model.get` dedupes by key on its own — re-navigating with the same
+`search.q` reuses the exact same `Query` instance, no refetch, no new
+subscription; a different `search.q` is a different key, hence a fresh one.
+The old instance ages out through the model's normal `idleTimeToLive` once
+nothing leases it anymore.

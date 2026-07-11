@@ -419,6 +419,10 @@ const captured = <A>(value: A | undefined): Effect.Effect<A> =>
     ? Effect.die(new Error("Unitflow test list was not captured."))
     : Effect.succeed(value);
 
+/** `Event.handler` forks an ongoing pipeline — a few tests below exercise
+ * it standalone, outside any model. */
+const testRegistry = Layer.mergeAll(Registry.layer, InstanceScope.root);
+
 const CounterLayer = CounterModel.layer.pipe(Layer.provideMerge(Registry.layer));
 const CounterPanelLayer = CounterPanelModel.layer.pipe(
   Layer.provideMerge(CounterModel.layer),
@@ -1074,7 +1078,7 @@ describe("Unitflow", () => {
       );
 
       assert.deepStrictEqual(seen, [1, 2, 3]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("Event.handler returns the same descriptor and settles with allSettled", () =>
@@ -1091,7 +1095,7 @@ describe("Unitflow", () => {
       // `allSettled` waits for the write it performs.
       yield* Registry.allSettled(Event.emit(returned, 5));
       assert.strictEqual(yield* Store.get(countStore), 5);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("multiple Event.handler applications all run per emit", () =>
@@ -1107,7 +1111,7 @@ describe("Unitflow", () => {
 
       assert.strictEqual(yield* Store.get(firstStore), 21);
       assert.strictEqual(yield* Store.get(secondStore), 42);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("Event.handler can attach to a source-only combined event", () =>
@@ -1130,7 +1134,7 @@ describe("Unitflow", () => {
       yield* Registry.allSettled(Event.emit(savedEvent, 1), Event.emit(failedEvent, 2));
 
       assert.deepStrictEqual(seen, [1, 2]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it("Event.handler is source-only and error-free (type-level)", () => {

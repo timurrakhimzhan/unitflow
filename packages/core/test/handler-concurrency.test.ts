@@ -1,7 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { Event, Registry, Store } from "../src/index.js";
+import * as Layer from "effect/Layer";
+import { Event, InstanceScope, Registry, Store } from "../src/index.js";
+
+/** `Event.handler` forks an ongoing pipeline — these tests exercise it
+ * standalone, outside any model. */
+const testRegistry = Layer.mergeAll(Registry.layer, InstanceScope.root);
 
 describe("Event.handler concurrency option", () => {
   it.effect("subscribes at fork: an emit later in the same synchronous chain is handled", () =>
@@ -27,7 +32,7 @@ describe("Event.handler concurrency option", () => {
       // No real suspension between the wiring above and this emit.
       yield* Registry.allSettled(Event.emit(event, 1));
       assert.deepStrictEqual(handled, [1]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("a parked handler does not block the next emission", () =>
@@ -51,6 +56,6 @@ describe("Event.handler concurrency option", () => {
       yield* Deferred.succeed(release, undefined);
       yield* Store.waitFor(hits, (current) => current.length === 2);
       assert.deepStrictEqual(yield* Store.get(hits), ["fast", "blocked"]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 });

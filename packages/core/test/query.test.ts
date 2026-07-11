@@ -8,8 +8,13 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
-import { Event, Registry, Store } from "../src/index.js";
+import { Event, InstanceScope, Registry, Store } from "../src/index.js";
 import * as Query from "../src/query.js";
+
+/** `Query.make`/`persist`/`repeat`/`refetchOn` fork ongoing pipelines
+ * (`InstanceScope`) — these tests exercise `Query` standalone, outside any
+ * model, so they opt in explicitly via `InstanceScope.root`. */
+const testRegistry = Layer.mergeAll(Registry.layer, InstanceScope.root);
 
 const awaitCondition = (predicate: () => boolean): Effect.Effect<void> =>
   Effect.gen(function* () {
@@ -24,7 +29,7 @@ const successValue = <A, E>(result: AsyncResult.AsyncResult<A, E>): A | null =>
     () => null,
   );
 
-const persistLayer = Layer.mergeAll(Registry.layer, KeyValueStore.layerMemory);
+const persistLayer = Layer.mergeAll(Registry.layer, InstanceScope.root, KeyValueStore.layerMemory);
 
 /** Waits until `Query.persist`'s background save pipeline lands in the KVS. */
 const waitForSaved = (key: string) =>
@@ -74,7 +79,7 @@ describe("Query", () => {
       assert.isTrue(AsyncResult.isInitial(query.state.initial));
       yield* Store.waitFor(query.state, (result) => successValue(result) === 1);
       assert.strictEqual(calls, 1);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("refresh keeps the previous value while waiting", () =>
@@ -98,7 +103,7 @@ describe("Query", () => {
         query.state,
         (result) => successValue(result) === 2 && !result.waiting,
       );
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("a dependency change reloads with the fresh dependency value", () =>
@@ -118,7 +123,7 @@ describe("Query", () => {
       yield* Registry.allSettled(Store.set(dep, "b"));
       assert.strictEqual(successValue(yield* Store.get(query.state)), "B");
       assert.deepStrictEqual(seen, ["a", "b"]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("a combined dependency change reloads with the fresh dependency value", () =>
@@ -139,7 +144,7 @@ describe("Query", () => {
       yield* Registry.allSettled(Store.set(dep, "b"));
       assert.strictEqual(successValue(yield* Store.get(query.state)), "B");
       assert.deepStrictEqual(seen, ["a", "b"]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("a nested combined dependency change reloads with the fresh dependency value", () =>
@@ -161,7 +166,7 @@ describe("Query", () => {
       yield* Registry.allSettled(Store.set(dep, "b"));
       assert.strictEqual(successValue(yield* Store.get(query.state)), "B");
       assert.deepStrictEqual(seen, ["a", "b"]);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("a failed reload keeps the previous success", () =>
@@ -180,7 +185,7 @@ describe("Query", () => {
       const failed = yield* Store.get(query.state);
       assert.isTrue(AsyncResult.isFailure(failed));
       assert.strictEqual(successValue(failed), "one");
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("refetchOn reloads when any source emits", () =>
@@ -201,7 +206,7 @@ describe("Query", () => {
       yield* Registry.allSettled(Event.emit(removed));
       assert.strictEqual(successValue(yield* Store.get(query.state)), 3);
       assert.strictEqual(calls, 3);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   it.effect("repeat reloads on every schedule step", () =>
@@ -222,7 +227,7 @@ describe("Query", () => {
       yield* TestClock.adjust("30 seconds");
       yield* Store.waitFor(query.state, (result) => successValue(result) === 3);
       assert.strictEqual(calls, 3);
-    }).pipe(Effect.provide(Registry.layer)),
+    }).pipe(Effect.provide(testRegistry)),
   );
 
   describe("makeInfinite", () => {
@@ -254,7 +259,7 @@ describe("Query", () => {
 
         yield* Registry.allSettled(Event.emit(query.loadMore));
         assert.strictEqual(successValue(yield* Store.get(query.state))?.length, 6);
-      }).pipe(Effect.provide(Registry.layer)),
+      }).pipe(Effect.provide(testRegistry)),
     );
 
     it.effect("refresh resets to the first page", () =>
@@ -268,7 +273,7 @@ describe("Query", () => {
         yield* Registry.allSettled(Event.emit(query.refresh));
         assert.deepStrictEqual(successValue(yield* Store.get(query.state)), [1, 2]);
         assert.isTrue(yield* Store.get(query.hasMore));
-      }).pipe(Effect.provide(Registry.layer)),
+      }).pipe(Effect.provide(testRegistry)),
     );
 
     it.effect("a dependency change resets to the first page", () =>
@@ -287,7 +292,7 @@ describe("Query", () => {
         yield* Registry.allSettled(Store.set(start, 3));
         assert.deepStrictEqual(successValue(yield* Store.get(query.state)), [3, 4]);
         assert.isTrue(yield* Store.get(query.hasMore));
-      }).pipe(Effect.provide(Registry.layer)),
+      }).pipe(Effect.provide(testRegistry)),
     );
 
     it.effect("a failed loadMore keeps the loaded value and stays retryable", () =>
@@ -313,7 +318,7 @@ describe("Query", () => {
         fail = false;
         yield* Registry.allSettled(Event.emit(query.loadMore));
         assert.deepStrictEqual(successValue(yield* Store.get(query.state)), [1, 2, 3, 4]);
-      }).pipe(Effect.provide(Registry.layer)),
+      }).pipe(Effect.provide(testRegistry)),
     );
 
     it.effect("persist restores the concatenated pages of a paginated query", () =>
@@ -373,7 +378,7 @@ describe("Query", () => {
           (result) => successValue(result)?.length === 4 && !result.waiting,
         );
         assert.deepStrictEqual(pageCalls, [3]);
-      }).pipe(Effect.provide(Registry.layer)),
+      }).pipe(Effect.provide(testRegistry)),
     );
   });
 
