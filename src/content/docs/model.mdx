@@ -17,6 +17,24 @@ That is the point of Unitflow's dependency injection: UI behavior can depend on
 Effect services and on other UI models, and tests can replace either one with
 a small fake layer.
 
+## Models Are Where Reactivity Lives
+
+A model's `make()` is the only place anything ongoing and reactive is allowed
+to run — `Query.make`, `Event.handler`, `Store.forwardTo`, `Event.forwardTo`,
+and `Registry.run` itself all require `InstanceScope`, and `InstanceScope` is
+never available as an ordinary composable `Layer`. It only ever gets injected
+dynamically, by a model's own construction. Call any of them from outside a
+model — a router middleware, a bare top-level script — and it fails to
+compile, not just "works but leaks": there is nowhere else those pipelines
+could get a real owner to dispose them.
+
+One-shot operations are unaffected and stay callable anywhere: `Store.get`/
+`set`, `Event.emit`, `Store.waitFor`/`Event.waitFor`, `Store.make`/
+`Event.make`. The line is not "reactive vs not" — it is "outlives this one
+call vs resolves and unwinds within it." A guard that needs an ongoing,
+deduped `Query` leases a keyed model that owns it, the same way any other
+code would — see [Router: Middleware](/router/middleware/#dont-fetch-reactively-inside-a-guard).
+
 ## Contract
 
 A model returns a public shape.

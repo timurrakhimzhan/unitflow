@@ -21,6 +21,29 @@ Mutation  -> async write state
 View      -> render binding
 ```
 
+## Philosophy
+
+Most state libraries are a toolbox: here are some primitives, structure them
+however you want. Unitflow is a corridor, not a toolbox — it would rather
+decide the architecture for you than hand you the freedom to reinvent it in
+every model. One shape for a public surface (`inputs`/`outputs`/`ui`), one
+place ongoing reactivity is allowed to live (inside a model's own `make()`,
+nowhere else), one direction data flows through composition (a parent
+resolves and owns its children, never the reverse). Fewer decisions per
+model means less to review, less to get subtly wrong, and less that a team
+— or an agent generating code on the team's behalf — has to independently
+rediscover each time.
+
+The corridor is enforced, not suggested. A capability's name says exactly
+where it belongs (`Input` types populate `inputs`, `Output` types populate
+`outputs` — the type and the section read the same word), and a model is
+the only place that can host anything that outlives a single call:
+`Query.make`, `Event.handler`, and friends require a capability
+(`InstanceScope`) that only a model's own construction ever provides, so
+code that tries to set up ongoing reactivity anywhere else fails to
+compile instead of quietly leaking. The goal isn't to make illegal states
+hard to reach — it's to make them not compile.
+
 ## Why
 
 Effect already gives an application dependency injection, `Layer`, `Scope`,
