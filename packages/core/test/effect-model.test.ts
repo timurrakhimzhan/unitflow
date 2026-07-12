@@ -160,7 +160,7 @@ class SlowModel extends Model.Service<SlowModel>()("/test/test/SlowModel")({
 
       return {
         inputs: {},
-        outputs: {},
+        outputs: { labelStore },
         ui: {
           labelStore,
         },
@@ -181,7 +181,7 @@ class FlakyModel extends Model.Service<FlakyModel>()("/test/test/FlakyModel")({
 
       return {
         inputs: {},
-        outputs: {},
+        outputs: { labelStore },
         ui: {
           labelStore,
         },
@@ -250,7 +250,7 @@ class SnapshotModel extends Model.Service<SnapshotModel>()(
           setCountEvent,
           snapshotEvent,
         },
-        outputs: {},
+        outputs: { countStore, snapshotStore },
         ui: {
           countStore,
           snapshotStore,
@@ -462,7 +462,7 @@ describe("Unitflow", () => {
   it.effect("runs model streams inside the registry scope", () =>
     Effect.gen(function* () {
       const counter = yield* Model.get(CounterModel);
-      const valuesFiber = yield* Store.stream(counter.ui.countStore).pipe(
+      const valuesFiber = yield* Store.stream(counter.outputs.countStore).pipe(
         Stream.filter((count) => count === 3),
         Stream.take(1),
         Stream.runCollect,
@@ -499,7 +499,7 @@ describe("Unitflow", () => {
     Effect.gen(function* () {
       const first = yield* Effect.gen(function* () {
         const counter = yield* Model.get(CounterModel);
-        const valuesFiber = yield* Store.stream(counter.ui.countStore).pipe(
+        const valuesFiber = yield* Store.stream(counter.outputs.countStore).pipe(
           Stream.filter((count) => count === 2),
           Stream.take(1),
           Stream.runCollect,
@@ -512,7 +512,7 @@ describe("Unitflow", () => {
 
       const second = yield* Effect.gen(function* () {
         const counter = yield* Model.get(CounterModel);
-        return yield* Store.get(counter.ui.countStore);
+        return yield* Store.get(counter.outputs.countStore);
       }).pipe(Effect.provide(CounterLayer));
 
       assert.deepStrictEqual(first, [2]);
@@ -524,7 +524,7 @@ describe("Unitflow", () => {
     Effect.gen(function* () {
       const first = yield* Model.get(RenderModel, { id: "first" });
       const second = yield* Model.get(RenderModel, { id: "second" });
-      const firstLabelFiber = yield* Store.stream(first.ui.labelStore).pipe(
+      const firstLabelFiber = yield* Store.stream(first.outputs.labelStore).pipe(
         Stream.filter((label) => label === "renamed:first"),
         Stream.take(1),
         Stream.runCollect,
@@ -534,7 +534,7 @@ describe("Unitflow", () => {
       yield* Event.emit(first.inputs.renameEvent, "renamed:first");
 
       const firstLabel = yield* Fiber.join(firstLabelFiber);
-      const secondLabel = yield* Store.get(second.ui.labelStore);
+      const secondLabel = yield* Store.get(second.outputs.labelStore);
 
       assert.deepStrictEqual(firstLabel, ["renamed:first"]);
       assert.strictEqual(secondLabel, "render:second");
@@ -551,7 +551,11 @@ describe("Unitflow", () => {
         Effect.forkChild,
       );
 
-      yield* Event.emit(panel.ui.counterModel.inputs.incrementEvent, 4);
+      // CounterPanelModel forwarded the whole CounterModel unit into its own
+      // `ui` (opaque outside `make`) — Model.get dedups by identity, so a
+      // fresh lease here is the SAME instance the panel already depends on.
+      const counter = yield* Model.get(CounterModel);
+      yield* Event.emit(counter.inputs.incrementEvent, 4);
       const count = yield* Fiber.join(countFiber);
 
       assert.deepStrictEqual(count, [4]);
@@ -561,7 +565,7 @@ describe("Unitflow", () => {
   it.effect("uses Effect services as dependencies", () =>
     Effect.gen(function* () {
       const model = yield* Model.get(PrefixedModel);
-      const label = yield* Store.get(model.ui.labelStore);
+      const label = yield* Store.get(model.outputs.labelStore);
       assert.strictEqual(label, "from-service");
     }).pipe(
       Effect.provide(
@@ -591,12 +595,12 @@ describe("Unitflow", () => {
       // The old instance's pipeline is gone: emitting on its event no longer
       // reaches its store.
       yield* Event.emit(counter.inputs.incrementEvent, 5);
-      const stale = yield* Store.get(counter.ui.countStore);
+      const stale = yield* Store.get(counter.outputs.countStore);
       assert.strictEqual(stale, 0);
 
       // A later get constructs a fresh, working instance.
       const fresh = yield* Model.get(CounterModel);
-      const valuesFiber = yield* Store.stream(fresh.ui.countStore).pipe(
+      const valuesFiber = yield* Store.stream(fresh.outputs.countStore).pipe(
         Stream.filter((count) => count === 2),
         Stream.take(1),
         Stream.runCollect,
@@ -615,7 +619,7 @@ describe("Unitflow", () => {
       });
 
       assert.strictEqual(slowMakeCount, 1);
-      assert.strictEqual(first.ui.labelStore, second.ui.labelStore);
+      assert.strictEqual(first.outputs.labelStore, second.outputs.labelStore);
     }).pipe(Effect.provide(SlowModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
   );
 
@@ -629,14 +633,14 @@ describe("Unitflow", () => {
       assert.strictEqual([...(yield* RcMap.keys(registry.instances))].length, 0);
 
       const second = yield* Model.get(FlakyModel);
-      assert.strictEqual(yield* Store.get(second.ui.labelStore), "ok");
+      assert.strictEqual(yield* Store.get(second.outputs.labelStore), "ok");
     }).pipe(Effect.provide(FlakyModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
   );
 
   it.effect("a dying pipeline does not take down the model's other pipelines", () =>
     Effect.gen(function* () {
       const model = yield* Model.get(TwoPipelinesModel);
-      const valuesFiber = yield* Store.stream(model.ui.countStore).pipe(
+      const valuesFiber = yield* Store.stream(model.outputs.countStore).pipe(
         Stream.filter((count) => count === 7),
         Stream.take(1),
         Stream.runCollect,
@@ -661,7 +665,7 @@ describe("Unitflow", () => {
     Effect.gen(function* () {
       const model = yield* Model.get(SnapshotModel);
 
-      const countFiber = yield* Store.stream(model.ui.countStore).pipe(
+      const countFiber = yield* Store.stream(model.outputs.countStore).pipe(
         Stream.filter((count) => count === 5),
         Stream.take(1),
         Stream.runCollect,
@@ -670,7 +674,7 @@ describe("Unitflow", () => {
       yield* Event.emit(model.inputs.setCountEvent, 5);
       yield* Fiber.join(countFiber);
 
-      const snapshotFiber = yield* Store.stream(model.ui.snapshotStore).pipe(
+      const snapshotFiber = yield* Store.stream(model.outputs.snapshotStore).pipe(
         Stream.filter((snapshot) => snapshot === 5),
         Stream.take(1),
         Stream.runCollect,
@@ -907,7 +911,12 @@ describe("Unitflow", () => {
   it.effect("setter events write into their store and stream its changes", () =>
     Effect.gen(function* () {
       const registry = yield* Registry;
-      const form = yield* Model.get(FormModel);
+      // FormModel's nameStore/onNameChange are ui-only by design (a setter
+      // event has no business being a composition target for other
+      // models) — this test plays the View's role, so it reads `ui` the
+      // same way `@unitflow/react`'s binding does internally.
+      // eslint-disable-next-line revizo/no-type-assertion
+      const form = (yield* Model.get(FormModel)) as unknown as Model.PortsOf<typeof FormModel>;
 
       const valuesFiber = yield* Store.stream(form.ui.nameStore).pipe(
         Stream.filter((name) => name === "Ada"),
@@ -1155,7 +1164,7 @@ describe("Unitflow", () => {
   it.effect("allows model overrides through Effect layers", () =>
     Effect.gen(function* () {
       const model = yield* Model.get(PrefixedModel);
-      const label = yield* Store.get(model.ui.labelStore);
+      const label = yield* Store.get(model.outputs.labelStore);
 
       assert.strictEqual(label, "fake");
     }).pipe(

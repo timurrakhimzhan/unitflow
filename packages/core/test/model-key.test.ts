@@ -119,7 +119,8 @@ class RefKeyModel extends Model.Service<RefKeyModel>()(
   make: (user) =>
     Effect.gen(function* () {
       const initial = yield* Store.get(user);
-      return { inputs: {}, outputs: {}, ui: { user, snapshot: Store.make(initial) } };
+      const snapshot = Store.make(initial);
+      return { inputs: {}, outputs: { snapshot }, ui: { user, snapshot } };
     }),
 }) {}
 
@@ -134,7 +135,8 @@ class RefBundleKeyModel extends Model.Service<RefBundleKeyModel>()(
   make: (key) =>
     Effect.gen(function* () {
       const initial = yield* Store.get(key.user);
-      return { inputs: {}, outputs: {}, ui: { user: key.user, snapshot: Store.make(initial) } };
+      const snapshot = Store.make(initial);
+      return { inputs: {}, outputs: { snapshot }, ui: { user: key.user, snapshot } };
     }),
 }) {}
 
@@ -256,7 +258,7 @@ describe("model keys", () => {
       const first = yield* Model.get(RefKeyModel, parentUser);
       // the key IS the live store — make() read it straight away, no Option,
       // no placeholder, no separate forwarding step.
-      assert.strictEqual(yield* Store.get(first.ui.snapshot), "ada");
+      assert.strictEqual(yield* Store.get(first.outputs.snapshot), "ada");
 
       const second = yield* Model.get(RefKeyModel, parentUser);
       assert.strictEqual(first, second);
@@ -264,7 +266,7 @@ describe("model keys", () => {
       const otherUser = Store.make("noah");
       const third = yield* Model.get(RefKeyModel, otherUser);
       assert.notStrictEqual(first, third);
-      assert.strictEqual(yield* Store.get(third.ui.snapshot), "noah");
+      assert.strictEqual(yield* Store.get(third.outputs.snapshot), "noah");
       assert.strictEqual([...(yield* RcMap.keys(registry.instances))].length, 2);
     }).pipe(Effect.provide(RefKeyModel.layer.pipe(Layer.provideMerge(Registry.layer)))),
   );
@@ -275,7 +277,7 @@ describe("model keys", () => {
       const session = Store.make("s1");
 
       const first = yield* Model.get(RefBundleKeyModel, { user: parentUser, session });
-      assert.strictEqual(yield* Store.get(first.ui.snapshot), "ada");
+      assert.strictEqual(yield* Store.get(first.outputs.snapshot), "ada");
 
       const second = yield* Model.get(RefBundleKeyModel, { user: parentUser, session });
       assert.strictEqual(first, second);

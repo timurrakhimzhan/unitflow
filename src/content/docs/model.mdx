@@ -180,6 +180,13 @@ Use `Model.get(...)` to depend on another UI model.
 const currentUser = yield* Model.get(CurrentUserModel);
 ```
 
+`ui` comes back opaque — `Model.get` is for reading another model's
+`outputs`, the composition surface, not reaching into a View-only one it
+was never meant to render. Forwarding the whole result on unchanged, into
+your OWN `ui` (`ui: { currentUser }`, for a child View to bind — see
+[Child Models](#child-models)), still works: nothing is removed, `ui` just
+stops being individually readable outside `make`.
+
 Both are provided through layers. Production can provide real services and
 real child models; tests can provide fake services or replace a child model
 with `Model.layerValue(...)`.

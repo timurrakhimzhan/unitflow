@@ -471,6 +471,19 @@ export type PortsFor<M extends AnyService, K> = [ShapesOf<M>] extends [never]
       : PortsOf<M>
     : PortsOf<M>;
 
+/** Widens a resolved `ui` section to `UnitPorts`'s own opaque
+ * `Record<string, unknown>` shape, leaving `inputs`/`outputs` (and any
+ * extra section) precisely typed. `Model.get` is a composition primitive —
+ * a caller reads another model's `outputs`, it does not reach into a
+ * View-only surface it was never meant to render. The whole opaque bag is
+ * still exactly `UnitPorts`-shaped, so forwarding it on into a PARENT's own
+ * `ui` (`ui: { child }`, for a child View to bind) still compiles — nothing
+ * is removed, `ui` just stops being individually readable outside `make`. A
+ * model with no `ui` section at all (headless) passes through unchanged. */
+type ExternalPorts<P> = P extends { readonly ui: unknown }
+  ? Omit<P, "ui"> & { readonly ui: Record<string, unknown> }
+  : P;
+
 export type ListItem<M extends AnyService> = PortsOf<M> & {
   readonly key: KeyInput<KeyOf<M>>;
 };
@@ -697,17 +710,23 @@ export const Service =
  * `make`, a React binding's scope, a test's `it.effect` scope (the registry
  * scope when no ambient scope exists). The instance is shared by all holders
  * and constructed once; when the last lease is released, the model's
- * `lifetime` policy decides how long it survives before disposal. */
+ * `lifetime` policy decides how long it survives before disposal.
+ *
+ * `ui` comes back opaque (see {@link ExternalPorts}) — read `outputs` for a
+ * data dependency; forward the whole result into a PARENT's own `ui` (`ui: {
+ * child }`) unchanged when the intent is handing a child unit to a View.
+ * `@unitflow/react`'s own binding resolves the same way internally but
+ * keeps `ui` precise — this narrowing is for everyone else. */
 export const get = <M extends AnyService, const Args extends KeyArgs<KeyOf<M>>>(
   model: M,
   ...args: Args
-): Effect.Effect<PortsFor<M, Args[0]>, ErrorOf<M>, Context.Service.Identifier<M>> =>
+): Effect.Effect<ExternalPorts<PortsFor<M, Args[0]>>, ErrorOf<M>, Context.Service.Identifier<M>> =>
   // Narrowing the shape to capability ports is a type-level operation over
   // the same runtime value; TypeScript cannot reduce `Ports<A>` for an
   // unresolved generic `A`, hence the one boundary cast.
   // eslint-disable-next-line revizo/no-type-assertion
   Effect.flatMap(model, (accessor) => accessor.get(...args)) as Effect.Effect<
-    PortsFor<M, Args[0]>,
+    ExternalPorts<PortsFor<M, Args[0]>>,
     ErrorOf<M>,
     Context.Service.Identifier<M>
   >;

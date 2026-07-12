@@ -433,7 +433,13 @@ describe("@unitflow/router", () => {
     );
 
     return Effect.gen(function* () {
-      const pages = yield* Model.get(AppPages);
+      // This test's whole point is that a mapped page's `ui` arrives
+      // precisely typed through `pages.ui` — the same access
+      // `@unitflow/react`'s binding does internally, not a plain
+      // Model.get-for-data read, hence the explicit cast back to full
+      // precision.
+      // eslint-disable-next-line revizo/no-type-assertion
+      const pages = (yield* Model.get(AppPages)) as unknown as Model.PortsOf<typeof AppPages>;
       const router = yield* Model.get(PageQueryRouter);
 
       // The page unit arrives typed through the map: label is Store<string>.
