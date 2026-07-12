@@ -7,18 +7,20 @@ import { Tabs, TabItem } from "@astrojs/starlight/components";
 
 Unitflow is an Effect runtime for React.
 
-A Unitflow model is a UI-facing Effect Service. It owns state, actions, async
-work, child models, and lifetime. It can depend on other UI models and regular
-Effect services through layers. A View binds the model to the screen at the
-edge.
+A Unitflow model is an Effect service that encapsulates a component's
+business logic. It owns state, actions, async work, child models, and
+lifetime. It can depend on other UI models and regular Effect services
+through layers. A View binds the model to the screen at the edge, and — for
+a model it leases itself — owns its lifecycle too: mounting leases it,
+unmounting releases it.
 
 ```txt
-Model     -> UI-facing Effect Service
+Model     -> Effect service encapsulating a component's logic
 Store     -> model state
 Event     -> model action
 Query     -> async read state
 Mutation  -> async write state
-View      -> render binding
+View      -> render binding, owns lifecycle for models it leases itself
 ```
 
 ## Philosophy
