@@ -587,7 +587,17 @@ export const layout =
  * attach is only needed for independent routes with no shared parent. */
 export const middleware =
   <M extends AnyMiddleware>(mw: M) =>
-  <Self extends AnyRouteGroup | Route.Any>(self: Self): Self extends AnyRouteGroup ? RouteGroup<WithMiddleware<RoutesOf<Self>, M>> : WithMiddleware<Self & Route.Any, M> =>
+  <Self extends AnyRouteGroup | Route.Any>(
+    self: Self,
+    // `Extract<Self, Route.Any>`, not `Self & Route.Any`: `Route.Any`'s own
+    // type params are `any` (`Route<string, any, ..., any, any>`), so
+    // intersecting them into a concrete route's fields collapses `Provided`
+    // (and everything else) to `any` — a real TS behavior, not a hypothetical
+    // one, caught by a scratch `tsc` run. `Extract` selects the matching
+    // union member instead of merging fields, so it stays precise.
+  ): [Self] extends [AnyRouteGroup]
+    ? RouteGroup<WithMiddleware<RoutesOf<Self>, M>>
+    : WithMiddleware<Extract<Self, Route.Any>, M> =>
     (isRoute(self)
       ? { ...self, middlewares: [...(self as Route.Any).middlewares, mw] }
       : (self as AnyRouteGroup).middleware(mw)) as never;
