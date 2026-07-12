@@ -92,7 +92,6 @@ void BoundMatchRoute;
 // #region routeview
 import * as Effect from "effect/Effect";
 import { Model, Store } from "@unitflow/core";
-import { routeView } from "@unitflow/router/react";
 import { AdminRouter } from "./middleware";
 
 // Keyed by the ROUTE's own Output — no placeholder, no Option, real data
@@ -108,10 +107,13 @@ export class DashboardRouteViewModel extends Model.Service<DashboardRouteViewMod
     }),
 }) {}
 
-const DashboardRouteView = routeView(DashboardRouteViewModel, ({ greeting }) => <p>{greeting}</p>);
+// The third, self-leasing argument (`{}` here) is what makes this lease
+// ITSELF, keyed by whatever `modelKey` it's handed — the router feeds
+// the matched route's own Output in automatically.
+const DashboardRouteView = View.make(DashboardRouteViewModel, ({ greeting }) => <p>{greeting}</p>, {});
 
-// routeView entries skip makePages entirely — the router leases the model
-// itself, lazily, the moment "dashboard" first matches.
+// A self-leasing entry skips makePages entirely — the router leases the
+// model itself, lazily, the moment "dashboard" first matches.
 export const AdminRouteViewApp = RouterView.make(AdminRouter.model, {
   routes: { dashboard: DashboardRouteView },
 });
@@ -145,8 +147,8 @@ void UserRoute;
 
 // #region validate-negative
 // Not a doc snippet — a regression check: RouterView.make must reject a
-// routeView model keyed by something other than its route's own
-// Route.Output, at the position it's wired into.
+// self-leasing View.make entry keyed by something other than its route's
+// own Route.Output, at the position it's wired into.
 class MismatchedRouteViewModel extends Model.Service<MismatchedRouteViewModel>()(
   "docs/MismatchedRouteView",
 )<{ readonly user: number }>()({
@@ -157,7 +159,7 @@ class MismatchedRouteViewModel extends Model.Service<MismatchedRouteViewModel>()
     }),
 }) {}
 
-const MismatchedRouteView = routeView(MismatchedRouteViewModel, () => null);
+const MismatchedRouteView = View.make(MismatchedRouteViewModel, () => null, {});
 
 export const BadAdminView = RouterView.make(AdminRouter.model, {
   routes: {

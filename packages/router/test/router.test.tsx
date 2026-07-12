@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as React from "react";
 import * as Schema from "effect/Schema";
 import { Event, Model, Registry, Query, Store } from "@unitflow/core";
+import { View } from "@unitflow/react";
 import { Route, Router } from "../src/index.js";
 import { makePages } from "../src/router.js";
 import * as RouterReact from "../src/react.js";
@@ -847,7 +848,7 @@ describe("@unitflow/router", () => {
     assert.isDefined(match);
   });
 
-  it("routeView accepts a model keyed by exactly its route's Output, rejects everything else (type-level)", () => {
+  it("a self-leasing View.make entry accepts a model keyed by exactly its route's Output, rejects everything else (type-level)", () => {
     class UsersGuard extends Router.Middleware<UsersGuard>()(
       "/test/router/routeview/Guard",
     )<{ readonly usersList: ReadonlyArray<{ readonly id: string }> }>() {}
@@ -886,13 +887,14 @@ describe("@unitflow/router", () => {
     }) {}
 
     if (false) {
-      const good = RouterReact.routeView(KeyedPageModel, ({ count }) => count);
-      // `routeView` alone only rejects "not keyed at all" — a wrong-but-real
-      // key type is only checked once it's placed at a specific route
-      // position (RouteFedModelViewEntry<RouteById<M, Id>> below).
-      const mismatched = RouterReact.routeView(MismatchedKeyModel, () => null);
+      const good = View.make(KeyedPageModel, ({ count }) => count, {});
+      // `View.make`'s self-leasing overload alone only requires SOME key —
+      // a wrong-but-real key type is only checked once it's placed at a
+      // specific route position (SelfLeasedRouteEntry<RouteById<M, Id>>
+      // below).
+      const mismatched = View.make(MismatchedKeyModel, () => null, {});
       // @ts-expect-error a singleton model has no key at all
-      const badSingleton = RouterReact.routeView(SingletonPageModel, () => null);
+      const badSingleton = View.make(SingletonPageModel, () => null, {});
 
       const goodApp = RouterReact.RouterView.make(model, { routes: { users5: good } });
       const badApp = RouterReact.RouterView.make(model, {

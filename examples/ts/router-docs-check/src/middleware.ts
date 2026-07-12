@@ -65,7 +65,7 @@ void readProvided;
 // #endregion provided
 
 // #region forward
-import { routeView } from "@unitflow/router/react";
+import { View } from "@unitflow/react";
 
 // Keyed by the route's own Output — `user` arrives on the very first line
 // of make(): no placeholder, no Option. The model isn't constructed AT ALL
@@ -80,5 +80,7 @@ export class DashboardPageModel extends Model.Service<DashboardPageModel>()(
     }),
 }) {}
 
-export const DashboardView = routeView(DashboardPageModel, ({ greeting }) => greeting);
+// The third argument (`{}`) is what makes this View lease its model
+// ITSELF, by key — the router feeds the matched route's own Output in.
+export const DashboardView = View.make(DashboardPageModel, ({ greeting }) => greeting, {});
 // #endregion forward

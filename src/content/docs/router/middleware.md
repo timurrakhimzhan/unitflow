@@ -159,12 +159,13 @@ AFTER the model already exists — no good for data a page model needs on the
 very first line of its own `make`, like a Query dependency.
 
 Key the page model by its route's own `Route.Output` instead, and pair it
-with [`routeView`](/router/react/) — the model is leased lazily, exactly
-when the route first matches, with the guard's Provides as the construction
-argument:
+with `View.make`'s [self-leasing overload](/react/#lease-a-model-directly)
+— the model is leased lazily, exactly when the route first matches, with
+the guard's Provides as the construction argument. `RouterView.make`
+recognizes it automatically, no separate router-specific export needed:
 
 ```ts
-import { routeView } from "@unitflow/router/react";
+import { View } from "@unitflow/react";
 
 // Keyed by the route's own Output — `user` arrives on the very first line
 // of make(): no placeholder, no Option. The model isn't constructed AT ALL
@@ -179,7 +180,9 @@ export class DashboardPageModel extends Model.Service<DashboardPageModel>()(
     }),
 }) {}
 
-export const DashboardView = routeView(DashboardPageModel, ({ greeting }) => greeting);
+// The third argument (`{}`) is what makes this View lease its model
+// ITSELF, by key — the router feeds the matched route's own Output in.
+export const DashboardView = View.make(DashboardPageModel, ({ greeting }) => greeting, {});
 ```
 
 The key must match the route's `Route.Output` exactly — a model keyed by

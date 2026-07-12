@@ -155,9 +155,10 @@ to rendering nothing, same as `Unitflow`'s own `building`/`failed`. The
 prop is `modelKey`, not `key` — `key` is React's own reserved prop for
 reconciliation, so it can never be read back out on the receiving end.
 
-The router's `routeView` (see [Router: React](/router/react/)) is a thin
-wrapper over this same mechanism — it just supplies the matched route's
-own `Route.Output` as the key automatically, renamed to `provided`.
+The router (see [Route-Fed Page Views](/router/react/#route-fed-page-views))
+recognizes this exact overload directly — no separate wrapper needed — and
+supplies the matched route's own `Route.Output` as `modelKey`
+automatically.
 
 ## View Rules
 

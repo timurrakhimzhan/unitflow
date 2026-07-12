@@ -84,16 +84,19 @@ says so explicitly — see the next section.
 
 ## Route-Fed Page Views
 
-A third kind of entry: `routeView(Model, render)`, for a page model KEYED
-by its own route's `Route.Output` (see [Router: Middleware](/router/middleware/#getting-provides-into-a-page-model)).
-Where a plain `View.make` page expects its unit already resolved, a
-`routeView` leases its model itself — lazily, the moment the route first
-matches, with the guard's Provides as the key. `make()` gets real, typed
-data on its very first line: no placeholder, no `Option`, no race with a
-`Query` dependency at construction.
+A third kind of entry: a self-leasing `View.make(Model, render, options)`
+(the third, `{building?, failed?}` argument — see
+[Lease a Model Directly](/react/#lease-a-model-directly)), for a page model
+KEYED by its own route's `Route.Output` (see [Router: Middleware](/router/middleware/#getting-provides-into-a-page-model)).
+Where a plain, two-argument `View.make` page expects its unit already
+resolved, a self-leasing one leases its model itself — lazily, the moment
+the route first matches — and the router feeds the matched route's own
+Output in as its key automatically. `make()` gets real, typed data on its
+very first line: no placeholder, no `Option`, no race with a `Query`
+dependency at construction.
 
 ```tsx
-import { routeView } from "@unitflow/router/react";
+import { View } from "@unitflow/react";
 
 // Keyed by the route's own Output — no placeholder, no Option, real data
 // on the very first line of make(), for a value the model needs
@@ -108,22 +111,26 @@ export class DashboardRouteViewModel extends Model.Service<DashboardRouteViewMod
     }),
 }) {}
 
-const DashboardRouteView = routeView(DashboardRouteViewModel, ({ greeting }) => <p>{greeting}</p>);
+// The third argument (`{}`) is what makes this View lease its model
+// ITSELF, by key, instead of expecting an already-resolved `unit` prop.
+const DashboardRouteView = View.make(DashboardRouteViewModel, ({ greeting }) => <p>{greeting}</p>, {});
 
-// routeView entries skip the eager page-model machinery entirely — the
+// A self-leasing entry skips the eager page-model machinery entirely — the
 // router leases the model itself, lazily, the moment "dashboard" matches.
 export const AdminRouteViewApp = RouterView.make(AdminRouter.model, {
   routes: { dashboard: DashboardRouteView },
 });
 ```
 
-`routeView` is a thin wrapper over `@unitflow/react`'s `View.make` itself —
-any [keyed model](/model/#keys) can lease itself the same way from a plain
-View, not just route-fed ones; see
-[Lease a Model Directly](/react/#lease-a-model-directly). The key must
-match the route's `Route.Output` exactly — a model keyed by the wrong
-type, wired into the wrong route id, fails to compile at the
-`RouterView.make({ routes: {...} })` call site.
+This is the exact same overload documented in
+[Lease a Model Directly](/react/#lease-a-model-directly) — nothing
+router-specific lives inside `View.make` itself; `RouterView.make` simply
+recognizes a self-leasing entry (from the value alone, not by name) and
+feeds the matched route's `provided` in as its `modelKey` automatically,
+instead of you passing one by hand. The key must match the route's
+`Route.Output` exactly — a model keyed by the wrong type, wired into the
+wrong route id, fails to compile at the `RouterView.make({ routes: {...} })`
+call site.
 
 ## Nesting the Views Map
 

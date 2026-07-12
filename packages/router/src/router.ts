@@ -1181,8 +1181,10 @@ export const make = <const Id extends string, const Group extends AnyRouteGroup>
  * mapped model is a plain `Model.Singleton`, leased once with no relation
  * to any particular match. A model that needs its route's `Output` (see
  * {@link Route.Output}) on the first line of its own `make` should be keyed
- * by it and wired through `routeView` instead (`@unitflow/router/react`);
- * one that only needs to react to it over time can read the route's own
+ * by it and self-leased directly via `View.make`'s third-argument overload
+ * instead (`@unitflow/router/react`'s `MatchRenderer` feeds the match's
+ * `provided` value in as `modelKey` automatically); one that only needs to
+ * react to it over time can read the route's own
  * `outputs.provided` (`Store.Combined<Option<Route.Output<R>>>`) reactively. */
 export const makePages = <
   M extends AnyRouter,

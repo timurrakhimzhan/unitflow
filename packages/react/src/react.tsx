@@ -148,7 +148,7 @@ const boundId = (unit: object): number => {
  * must stay the same across renders for one call site (true for a model's
  * own `ui` shape, fixed per model class). What `View.make`'s `Bound`
  * component uses internally; exported so other renderers (e.g. the
- * router's `routeView`) can bind a `ui` record the same way without
+ * router's self-leasing route views) can bind a `ui` record the same way without
  * duplicating the per-entry hook logic. */
 export const useBoundUi = <Ui extends Record<string, unknown>>(ui: Ui): BoundUi<Ui> => {
   const units: Record<string, unknown> = {};
@@ -183,6 +183,19 @@ export interface KeyedViewProps<M extends Model.AnyService> {
   readonly modelKey: Model.KeyOf<M>;
   readonly children?: React.ReactNode;
 }
+
+/** Marks a `View.make` result built via the self-leasing (keyed) overload —
+ * distinguishes it, from the value alone, from a plain `unit`-prop
+ * `ViewProps` component. For a consumer that walks a tree of `View.make`
+ * results without rendering them (e.g. the router's routes map) and needs to
+ * know whether a given entry expects `unit` (pre-resolved by a parent) or
+ * `modelKey` (leases itself) — see {@link isSelfLeasedView}. */
+const SelfLeasedTypeId = Symbol.for("@unitflow/react/SelfLeasedView");
+
+/** True for a `View.make(Model, render, options)` result — the self-leasing
+ * overload, `options` (even `{}`) included at the call site. */
+export const isSelfLeasedView = (value: unknown): boolean =>
+  typeof value === "object" && value !== null && SelfLeasedTypeId in value;
 
 export function makeView<M extends Model.Viewable, P extends object = Record<never, never>>(
   model: M,
@@ -257,8 +270,11 @@ export function makeView(
   };
   Component.displayName = `View(${model.modelKey})`;
   // The view carries its model: composition layers (e.g. a router's views
-  // map) can lease the model themselves and hand the unit back in.
-  return Object.assign(Component, { model });
+  // map) can lease the model themselves and hand the unit back in. The
+  // self-leasing branch also carries `SelfLeasedTypeId`, so such a
+  // composition layer can tell it apart from a `unit`-prop entry by the
+  // value alone — see `isSelfLeasedView`.
+  return Object.assign(Component, options === undefined ? { model } : { model, [SelfLeasedTypeId]: true });
 }
 
 /**

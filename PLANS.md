@@ -52,6 +52,16 @@ guarantee the docs currently claim either.
 
 ### What actually shipped (smaller than "the landed idea" below)
 
+UPDATE: the `routeView` combinator described below was later removed —
+`View.make`'s existing self-leasing overload got a generic
+`SelfLeasedTypeId` marker (`@unitflow/react`) instead of the router-specific
+`RouteFedTypeId`, so a route-fed page is now just a bare
+`View.make(Model, render, {})` placed directly in the routes map;
+`RouterView.make` recognizes it from the value alone and feeds the match's
+`Route.Output` in as `modelKey`. Same mechanism, one fewer exported name.
+The reasoning below (keyed model, lazy lease, `collectPageModels` skip) is
+otherwise still accurate.
+
 `makePages`/`PageMap`/`ValidatePageMap` were NOT reworked — they're
 untouched, still eager, still `Model.Singleton`-only, still exactly as
 published in `router@0.4.0`. Instead:
