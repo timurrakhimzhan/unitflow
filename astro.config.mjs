@@ -8,7 +8,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "Unitflow",
-      description: "Effect-native UI state management with scoped models.",
+      description: "An Effect runtime for React.",
       logo: {
         dark: "./src/assets/unitflow-logo-dark.svg",
         light: "./src/assets/unitflow-logo.svg",
