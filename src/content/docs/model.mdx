@@ -1,131 +1,21 @@
 ---
 title: Model
-description: UI-facing Effect services, public sections, dependencies, keys, and child models.
+description: Define UI behavior as an Effect service with state, actions, dependencies, child models, and owned lifetime.
 ---
 
-import { Tabs, TabItem } from "@astrojs/starlight/components";
+A model is an Effect service for one unit of application behavior: a screen,
+form, dialog, card, row, or headless coordinator. It owns the state and async
+work for that unit. React only renders the model's public `ui` surface.
 
-A Unitflow model is a UI-facing Effect service.
-
-It describes one coherent piece of UI behavior: a screen, panel, form, card,
-row, dialog, or dynamically created item. The model owns durable state,
-actions, async work, child models, and lifecycle. Because it is an Effect
-service, it lives in the same dependency graph as API clients, KeyValueStore,
-configuration, clocks, schedulers, and other services.
-
-That is the point of Unitflow's dependency injection: UI behavior can depend on
-Effect services and on other UI models, and tests can replace either one with
-a small fake layer.
-
-## Models Are Where Reactivity Lives
-
-A model's `make()` is the only place anything ongoing and reactive is allowed
-to run — `Query.make`, `Event.handler`, `Store.forwardTo`, `Event.forwardTo`,
-and `Registry.run` itself all require `InstanceScope`, and `InstanceScope` is
-never available as an ordinary composable `Layer`. It only ever gets injected
-dynamically, by a model's own construction. Call any of them from outside a
-model — a router middleware, a bare top-level script — and it fails to
-compile, not just "works but leaks": there is nowhere else those pipelines
-could get a real owner to dispose them.
-
-One-shot operations are unaffected and stay callable anywhere: `Store.get`/
-`set`, `Event.emit`, `Store.waitFor`/`Event.waitFor`, `Store.make`/
-`Event.make`. The line is not "reactive vs not" — it is "outlives this one
-call vs resolves and unwinds within it." A guard that needs an ongoing,
-deduped `Query` leases a keyed model that owns it, the same way any other
-code would — see [Router: Middleware](/router/middleware/#dont-fetch-reactively-inside-a-guard).
-
-## Contract
-
-A model returns a public shape.
-
-```ts
-return {
-  inputs: {},
-  outputs: {},
-  ui: {},
-};
+```text
+model make() -> stores + events + queries + child models -> public ports
 ```
 
-Those sections decide how other code may use the model.
+Choose model boundaries by ownership. A task card owns task editing; a board
+owns the collection of cards; a session model owns authentication state. Avoid
+one global model that knows every screen.
 
-```txt
-inputs   -> write-only actions for parents, persistence, and tests
-outputs  -> read-only state or events for parents, tests, and observers
-ui       -> render surface for a View (optional)
-```
-
-`ui` is optional: a headless model — a service other models resolve, with no
-screen of its own — returns only `inputs`/`outputs`. `View.make` accepts only
-models with a `ui` section (`Model.Viewable`), so binding a headless model to
-a View fails to compile.
-
-`inputs` can be triggered, but not observed. Put actions here when outside code
-may tell the model to do something.
-
-```ts
-inputs: {
-  submit,
-}
-```
-
-Build an input event with `Event.input()`, not `Event.make()`: the model gets
-back a read-only handle (it can `get`/`stream` its own input, never `emit`
-it) — only outside code, through the port, can drive it. Putting a full
-`Event.make()` result directly in `inputs` is a compile error for exactly
-that reason. An already-existing full event the model still legitimately
-uses with full capability elsewhere (say, a dependency's own event) goes
-through `Event.toInput()` instead — same value, narrowed view, just for this
-one port.
-
-```ts
-const submit = yield* Event.input<void>().pipe(Event.handler(() => /* ... */));
-```
-
-A live VALUE a model needs is not an input port — a parent forwarding a
-store into a child's `inputs` invites reading it before the forward has
-happened. Key the model by the store reference instead (see
-[Keying On a Live Store](#keying-on-a-live-store)) or, for a value the route
-already resolved, key it by the route's own `Route.Output`.
-
-`outputs` can be read or subscribed to, but not written. Put values here when
-parent models, tests, analytics, or persistence code may observe them.
-
-```ts
-outputs: {
-  selectedProject,
-  results,
-}
-```
-
-`ui` is what a View receives. Stores become current values, events become
-functions, and child models become units passed to child Views.
-
-```ts
-ui: {
-  searchState,
-  setQuery,
-  submit,
-  picker,
-}
-```
-
-You can add extra read-only sections for a specific audience.
-
-```ts
-return {
-  inputs: { submit },
-  outputs: { result },
-  ui: { formState, setName, submit },
-  analytics: { submitted },
-  debug: { status },
-};
-```
-
-Extra sections are available through `Model.get(...)` and hidden from
-`View.make(...)`. They follow the same read-only rule as `outputs`.
-
-## Define a Model
+## A Complete Small Model
 
 ```ts
 import * as Effect from "effect/Effect";
@@ -134,74 +24,181 @@ import { Event, Model, Store } from "@unitflow/core";
 export class CounterModel extends Model.Service<CounterModel>()(
   "docs/counter",
 )({
-  make: Effect.gen(function* () {
+  make: () => Effect.gen(function* () {
     const count = Store.make(0);
 
     const increment = yield* Event.input<number>().pipe(
       Event.handler((amount) =>
-        Store.update(count, (value) => value + amount),
+        Store.update(count, (current) => current + amount),
       ),
     );
 
     return {
       inputs: { increment },
       outputs: { count },
-      ui: {
-        count,
-        onIncrement: increment,
-      },
+      ui: { count, increment },
     };
   }),
 }) {}
 ```
 
-The class has a `.layer`, so it composes like any other Effect service.
+This class is both the model definition and its Effect service tag.
+
+- `make` runs once when this model instance is constructed.
+- `count` is private mutable state owned by the instance.
+- `increment` is the public action that changes it.
+- the returned sections are the only public contract.
+- `CounterModel.layer` supplies the model implementation to the application.
+
+No hook or component is involved. Another model or a test can resolve the
+same contract with `Model.get(CounterModel)`.
+
+## The Public Contract
+
+Every model returns `inputs` and `outputs`. Add `ui` when the model has a View.
+
+| Section | Purpose | Typical values |
+| --- | --- | --- |
+| `inputs` | Actions outside code may trigger | `Event.input`, mutation `run` |
+| `outputs` | State and events outside code may observe | stores, output events |
+| `ui` | The complete render surface | stores, actions, child units |
+
+The sections are capability boundaries, not three copies of the same object.
+
+### Inputs are actions
+
+Create a public input with `Event.input`, then attach the model-owned behavior:
+
+```ts
+const submit = yield* Event.input<FormData>().pipe(
+  Event.handler((form) => save(form)),
+);
+```
+
+Inside `make`, `submit` is subscribe-only: the model handles the action but
+cannot emit its own public input. Code resolving the model receives the other
+side and can call `Event.emit(model.inputs.submit, form)`.
+
+Use `Event.toInput(existingEvent)` when republishing an existing full event as
+an input. Do not put a newly-created `Event.make()` directly in `inputs`; that
+would let the model drive its own public command port.
+
+### Outputs are observations
+
+Outputs expose stores or events without exposing write capability:
+
+```ts
+outputs: {
+  count,
+  saved,
+}
+```
+
+Parent models, tests, persistence, and analytics read these ports. The model
+still holds the full store internally, so it can update it.
+
+### UI is the render contract
+
+`View.make` binds only `ui`:
+
+```ts
+ui: {
+  count,
+  increment,
+}
+```
+
+A store becomes its current value, an event input becomes a callback, and a
+child unit remains a value that can be passed to the child's View. Components
+do not need access to `inputs` or `outputs`.
+
+A headless model simply omits `ui`:
+
+```ts
+return {
+  inputs: { refresh },
+  outputs: { session },
+};
+```
+
+`View.make` rejects headless models, while other models can still resolve them
+with `Model.get`.
+
+### Audience-specific outputs
+
+Additional sections are allowed when an output is meant for one audience:
+
+```ts
+return {
+  inputs: { submit },
+  outputs: { result },
+  ui: { formState, submit },
+  analytics: { submitted },
+  debug: { status },
+};
+```
+
+They follow the read-only rules of `outputs` and are available through
+`Model.get`, but they are not passed to a View.
+
+## Dependencies and Layers
+
+`make` returns a normal Effect. Resolve application services with
+`yield* Service` and other models with `Model.get`:
+
+```ts
+import * as Effect from "effect/Effect";
+import { Event, Model, Query } from "@unitflow/core";
+
+export class ProjectsPageModel extends Model.Service<ProjectsPageModel>()(
+  "docs/projects-page",
+)({
+  make: () => Effect.gen(function* () {
+    const api = yield* ProjectsApi;
+    const session = yield* Model.get(SessionModel);
+
+    const projects = yield* Query.make({
+      stores: { user: session.outputs.currentUser },
+      handler: ({ user }) => api.listForUser(user.id),
+    });
+
+    return {
+      inputs: { refresh: Event.toInput(projects.refresh) },
+      outputs: { projects: projects.state },
+      ui: { projects: projects.state, refresh: projects.refresh },
+    };
+  }),
+}) {}
+```
+
+The model's layer declares those requirements. Compose their implementations
+at the application boundary:
 
 ```ts
 import * as Layer from "effect/Layer";
-import { Registry } from "@unitflow/core";
 
-const layer = CounterModel.layer.pipe(
-  Layer.provideMerge(Registry.layer),
+const AppLayer = ProjectsPageModel.layer.pipe(
+  Layer.provideMerge(SessionModel.layer),
+  Layer.provideMerge(ProjectsApiLive),
 );
 ```
 
-## Dependencies
+The React runtime supplies the registry for the model graph. A headless Effect
+test provides `Registry.layer` explicitly.
 
-Inside `make`, use normal Effect services with `yield* Service`.
+`Model.get` intentionally exposes another model's observation sections, not
+its individually-readable `ui`. The parent may pass the returned child unit
+through its own `ui`, but business composition should use the child's
+`outputs`.
 
-```ts
-const api = yield* ProjectApi;
-```
+Tests can replace either kind of dependency. Regular Effect services use fake
+layers; models can use `Model.layerValue(ChildModel, fakePorts)`.
 
-Use `Model.get(...)` to depend on another UI model.
+## Singleton and Keyed Models
 
-```ts
-const currentUser = yield* Model.get(CurrentUserModel);
-```
-
-`ui` comes back opaque — `Model.get` is for reading another model's
-`outputs`, the composition surface, not reaching into a View-only one it
-was never meant to render. Forwarding the whole result on unchanged, into
-your OWN `ui` (`ui: { currentUser }`, for a child View to bind — see
-[Child Models](#child-models)), still works: nothing is removed, `ui` just
-stops being individually readable outside `make`.
-
-Both are provided through layers. Production can provide real services and
-real child models; tests can provide fake services or replace a child model
-with `Model.layerValue(...)`.
-
-```ts
-const testLayer = ParentModel.layer.pipe(
-  Layer.provideMerge(Model.layerValue(CurrentUserModel, fakeUser)),
-  Layer.provideMerge(FakeProjectApi.layer),
-  Layer.provideMerge(Registry.layer),
-);
-```
-
-## Keys
-
-Singleton models omit a key. Keyed models add `<Key>()`.
+The counter above is a singleton: there is one instance per registry. A model
+representing a repeated entity declares a key between the service id and its
+options:
 
 ```ts
 interface TaskKey {
@@ -215,321 +212,196 @@ export class TaskModel extends Model.Service<TaskModel>()(
     Effect.gen(function* () {
       const title = Store.make(`Task ${id}`);
 
+      const rename = yield* Event.input<string>().pipe(
+        Event.handler((nextTitle) => Store.set(title, nextTitle)),
+      );
+
       return {
-        inputs: {},
+        inputs: { rename },
         outputs: { title },
-        ui: { title },
+        ui: { title, rename },
       };
     }),
 }) {}
 ```
 
-The same key resolves the same model instance. Keys can be primitive values,
-plain-data records or arrays (nesting is fine), or Effect `Data` values —
-just keep them stable and never mutate one after it's been used to lease an
-instance.
-
-### Keying On a Live Store
-
-A `Store` reference is itself a valid key — the same reference resolves the
-same instance, a different one resolves a different instance — so a model
-can require, at the type level, a live dependency from whoever leases it:
+Resolve it with its key:
 
 ```ts
-export class UsersPanelModel extends Model.Service<UsersPanelModel>()(
-  "docs/users-panel",
-)<Store.Output<string>>()({
-  make: (currentUser) =>
-    Effect.gen(function* () {
-      // currentUser is real from the first line — no Option, no placeholder,
-      // no race with whatever forwards a value in later
-      const initial = yield* Store.get(currentUser);
-      const orders = yield* Query.make({
-        stores: { currentUser },
-        handler: ({ currentUser }) => fetchOrders(currentUser),
-      });
-      return { inputs: {}, outputs: {}, ui: { orders: orders.state } };
-    }),
-}) {}
+const task = yield* Model.get(TaskModel, { id: "task-1" });
 ```
 
-```ts
-const currentUser = yield* Model.get(SessionModel).pipe(
-  Effect.map((session) => session.outputs.currentUser),
-);
-const panel = yield* Model.get(UsersPanelModel, currentUser);
-```
+Within one registry, equal keys resolve the same instance and therefore the
+same state. Different keys produce independent instances. Valid keys include
+primitives, immutable plain-data records and arrays, and Effect `Data` values.
+Nested records are supported. Never mutate a key after using it.
 
-Forgetting the second argument is a compile error (`Model.get` requires a
-key), so `UsersPanelModel` can never be leased without a real, live
-`currentUser` — unlike an `inputs` port (see [Contract](#contract)), which a
-model creates itself and can be leased with nothing ever written into it.
-Reach for a key when a dependency must be there from construction; reach for
-`Event.input` for an action that may legitimately arrive later, or never.
+Use a singleton for one application-level identity such as the current
+session. Use a keyed model when the identity comes from data: task id, account
+id, editor tab, route output, and similar values.
 
-A record bundling several references works the same way — one key, several
-live dependencies:
+## Compose Parent and Child Models
+
+A parent leases a child with `Model.get`, reads its outputs, and may expose the
+child unit to its View:
 
 ```ts
-interface PanelRefs {
-  readonly currentUser: Store.Output<string>;
-  readonly session: Store.Output<string>;
-}
-
-export class UsersPanelModel extends Model.Service<UsersPanelModel>()(
-  "docs/users-panel",
-)<PanelRefs>()({
-  make: ({ currentUser, session }) => /* ... */,
-}) {}
-```
-
-An `Event` reference is rejected as a key, bare or bundled — a `Store`
-carries a current value, a stable identity a model can reasonably depend
-on; an `Event` is an occurrence over time, with no such identity to key on.
-An action a model needs to react to — even one with exactly one legitimate
-caller — stays `Event.input`, not a key.
-
-## Child Models
-
-A child model is just another model in the Effect graph. The child owns one
-piece of UI behavior; the parent resolves that child and talks to its public
-sections.
-
-`ProjectPickerModel` below owns project selection. The parent does not reach
-into its local stores or handlers. It resolves the picker, listens to
-changes in `picker.outputs.selectedProject`, and passes the child unit to the
-View through `ui`.
-
-<Tabs>
-  <TabItem label="Child">
-
-```ts
-import * as Effect from "effect/Effect";
-import { Event, Model, Store } from "@unitflow/core";
-
-export type ProjectId = string;
-
-interface Project {
-  readonly id: ProjectId;
-  readonly name: string;
-}
-
-interface ProjectPickerKey {
-  readonly id: string;
-}
-
-export class ProjectPickerModel extends Model.Service<ProjectPickerModel>()(
-  "docs/project-picker",
-)<ProjectPickerKey>()({
-  make: Effect.gen(function* () {
-    const projects = Store.make<ReadonlyArray<Project>>([
-      { id: "p1", name: "Lobby refresh" },
-      { id: "p2", name: "Mobile checkout" },
-    ]);
-    const selectedProject = Store.make<ProjectId | null>(null);
-
-    const select = yield* Event.input<ProjectId>().pipe(
-      Event.handler((projectId) => Store.set(selectedProject, projectId)),
-    );
-
-    return {
-      inputs: { select },
-      outputs: { selectedProject },
-      ui: {
-        projects,
-        selectedProject,
-        onSelect: select,
-      },
-    };
-  }),
-}) {}
-```
-
-  </TabItem>
-  <TabItem label="Parent">
-
-```ts
-import * as Effect from "effect/Effect";
-import { Event, Model, Store } from "@unitflow/core";
-import {
-  ProjectPickerModel,
-  type ProjectId,
-} from "./project-picker-model";
-
-export class ProjectPanelModel extends Model.Service<ProjectPanelModel>()(
-  "docs/project-panel",
-)({
-  make: Effect.gen(function* () {
-    const picker = yield* Model.get(ProjectPickerModel, {
-      id: "project-picker",
-    });
-    const currentProject = Store.make<ProjectId | null>(null);
-    const selected = Event.make<ProjectId>();
-
-    yield* picker.outputs.selectedProject.pipe(
-      Store.changed,
-      Event.handler((projectId) =>
-        Effect.gen(function* () {
-          if (projectId === null) return;
-
-          yield* Store.set(currentProject, projectId);
-          yield* Event.emit(selected, projectId);
-        }),
-      ),
-    );
+export class TaskPanelModel extends Model.Service<TaskPanelModel>()(
+  "docs/task-panel",
+)<TaskKey>()({
+  make: (key) => Effect.gen(function* () {
+    const task = yield* Model.get(TaskModel, key);
 
     return {
       inputs: {},
-      outputs: { selected, currentProject },
-      ui: {
-        picker,
-        currentProject,
-      },
+      outputs: { title: task.outputs.title },
+      ui: { task },
     };
   }),
 }) {}
 ```
 
-  </TabItem>
-</Tabs>
+`TaskPanelModel` and its child share the same task identity. The parent owns a
+lease on that child; disposing the parent releases it. In React, the parent
+View passes `task` to `TaskView` as its `unit` prop. JSX does not construct the
+child or decide its lifetime.
 
-The parent View passes `picker` to the child View. JSX does not need to know
-how the child is built.
+This keeps responsibilities explicit:
 
-## Model.list
+- the child owns its state and actions;
+- the parent owns orchestration and child identity;
+- the View renders units the model graph already owns.
 
-Use `Model.list(ChildModel)` when the parent owns a dynamic collection of
-child models: kanban cards, tabs, uploads, rows, inspectors, and similar UI
-pieces.
+## Own Dynamic Children with `Model.list`
 
-In a board, each task model owns one card. The board model owns the list of
-cards, creates and removes cards, and derives aggregate board state from the
-children.
-
-<Tabs>
-  <TabItem label="Child">
+Use `Model.list(ChildModel)` when a parent owns a changing collection of keyed
+children: cards, rows, tabs, uploads, or inspectors.
 
 ```ts
-import * as Effect from "effect/Effect";
-import { Event, Model, Store } from "@unitflow/core";
-
-export type TaskStatus = "todo" | "doing" | "done";
-
-export interface TaskKey {
-  readonly id: string;
-}
-
-export interface TaskState {
-  readonly id: string;
-  readonly title: string;
-  readonly status: TaskStatus;
-}
-
-const initialTask = (id: string): TaskState => ({
-  id,
-  title: "New task",
-  status: "todo",
-});
-
-export class TaskModel extends Model.Service<TaskModel>()(
-  "docs/kanban/task",
-)<TaskKey>()({
-  make: ({ id }) =>
-    Effect.gen(function* () {
-      const state = Store.make<TaskState>(initialTask(id));
-
-      const rename = yield* Event.input<string>().pipe(
-        Event.handler((title) =>
-          Store.update(state, (task) => ({
-            ...task,
-            title: title.trim() === "" ? task.title : title,
-          })),
-        ),
-      );
-
-      const move = yield* Event.input<TaskStatus>().pipe(
-        Event.handler((status) =>
-          Store.update(state, (task) => ({ ...task, status })),
-        ),
-      );
-
-      return {
-        inputs: { rename, move },
-        outputs: { state },
-        ui: { state, rename, move },
-      };
-    }),
-}) {}
-```
-
-  </TabItem>
-  <TabItem label="Parent">
-
-```ts
-import * as Effect from "effect/Effect";
-import { Event, Model, Store } from "@unitflow/core";
-import { TaskModel } from "./task-model";
-
-export class BoardModel extends Model.Service<BoardModel>()(
-  "docs/kanban/board",
-)({
-  make: Effect.gen(function* () {
-    const draft = Store.make("");
+export class BoardModel extends Model.Service<BoardModel>()("docs/board")({
+  make: () => Effect.gen(function* () {
     const tasks = yield* Model.list(TaskModel);
-
     yield* tasks.push({ id: "task-1" });
-    yield* tasks.push({ id: "task-2" });
 
-    const taskStates = tasks.select((task) => task.outputs.state);
-    const boardState = Store.combine([draft, taskStates], (draft, taskStates) => ({
-      draft,
-      columns: {
-        todo: taskStates.filter((task) => task.status === "todo"),
-        doing: taskStates.filter((task) => task.status === "doing"),
-        done: taskStates.filter((task) => task.status === "done"),
-      },
-    }));
+    const taskTitles = tasks.select((task) => task.outputs.title);
 
-    let nextTaskId = 3;
-
-    const create = yield* Event.input<void>().pipe(
-      Event.handler(() =>
-        Effect.gen(function* () {
-          const title = (yield* Store.get(draft)).trim();
-          if (title === "") return;
-
-          const task = yield* tasks.push({ id: `task-${nextTaskId++}` });
-          yield* Event.emit(task.inputs.rename, title);
-          yield* Store.set(draft, "");
-        }),
-      ),
+    const addTask = yield* Event.input<string>().pipe(
+      Event.handler((id) => Effect.asVoid(tasks.push({ id }))),
     );
-
-    const remove = yield* Event.input<string>().pipe(
+    const removeTask = yield* Event.input<string>().pipe(
       Event.handler((id) => tasks.remove({ id })),
     );
 
     return {
-      inputs: { create, remove },
-      outputs: { taskStates },
+      inputs: { addTask, removeTask },
+      outputs: { taskTitles },
       ui: {
-        boardState,
-        taskUnits: tasks.items,
-        setDraft: Event.setter(draft),
-        create,
-        remove,
+        tasks: tasks.items,
+        addTask,
+        removeTask,
       },
     };
   }),
 }) {}
 ```
 
-  </TabItem>
-</Tabs>
+- `push(key)` creates or reuses the keyed child and adds it to this list.
+- `remove(key)` releases this list's ownership of the child.
+- `items` is the live store of child units for the View.
+- `select` combines one output store from every child.
 
-`tasks.items` is the live store of child units that a board View passes to
-task Views. Each item includes the list key as `task.key`, so a task keyed by
-`{ id: "task-1" }` can render with `key={task.key.id}`. `tasks.select(...)`
-creates one store from the same output in each child. `tasks.push(...)`
-creates or reuses a child by key, and `tasks.remove(...)` removes that child
-from this list.
+See the complete [task-board example](/examples/task-board/) for rendering,
+derived columns, and tests.
+
+## Model Lifetime Owns Reactive Work
+
+The model instance owns everything ongoing created during `make`: event
+handlers, queries, mutations, forwarding pipelines, child leases, and Effect
+finalizers. Disposal stops that work together.
+
+This is why constructors such as `Query.make`, `Mutation.make`,
+`Event.handler`, and `Store.forwardTo` belong inside a model. Starting them in
+a top-level script or route middleware would create work with no model
+lifetime; the required `InstanceScope` is unavailable there, so it does not
+compile.
+
+Singletons live until explicit disposal or registry shutdown. Keyed models
+stay cached for their idle TTL after the final lease is released. Lists can
+release children immediately. See [Lifetime and Finalizers](/lifetime/) for
+TTL options, `keepAlive`, manual disposal, and cleanup hooks.
+
+## Advanced: Key on a Live Store
+
+Sometimes a child needs an existing live store from the first line of `make`,
+not a copied value delivered later. A store reference is a valid model key:
+
+```ts
+import { Event, Model, Query, Store } from "@unitflow/core";
+
+export class UserOrdersModel extends Model.Service<UserOrdersModel>()(
+  "docs/user-orders",
+)<Store.Output<string>>()({
+  make: (currentUserId) =>
+    Effect.gen(function* () {
+      const orders = yield* Query.make({
+        stores: { currentUserId },
+        handler: ({ currentUserId }) => fetchOrders(currentUserId),
+      });
+
+      return {
+        inputs: { refresh: Event.toInput(orders.refresh) },
+        outputs: { orders: orders.state },
+        ui: { orders: orders.state, refresh: orders.refresh },
+      };
+    }),
+}) {}
+```
+
+```ts
+const session = yield* Model.get(SessionModel);
+const orders = yield* Model.get(
+  UserOrdersModel,
+  session.outputs.currentUserId,
+);
+```
+
+The store reference determines instance identity; changes to its value rerun
+the query inside that same instance. A different store reference creates a
+different instance.
+
+An event reference is deliberately not a valid key: an event is an occurrence,
+not a current live value. Actions arriving after construction remain
+`Event.input` ports.
+
+## Test Through the Public Contract
+
+A model test resolves the model, emits the same public action as production,
+waits for owned reactive work to settle, and reads an output:
+
+```ts
+import { assert, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { Event, Model, Registry, Store } from "@unitflow/core";
+
+const testLayer = CounterModel.layer.pipe(
+  Layer.provideMerge(Registry.layer),
+);
+
+it.effect("increments", () =>
+  Effect.gen(function* () {
+    const counter = yield* Model.get(CounterModel);
+
+    yield* Registry.allSettled(
+      Event.emit(counter.inputs.increment, 3),
+    );
+
+    assert.strictEqual(yield* Store.get(counter.outputs.count), 3);
+  }).pipe(Effect.provide(testLayer)),
+);
+```
+
+Tests do not need React or a browser. See [Testing](/testing/) for fake model
+layers, construction failures, and cleanup assertions.
+
+Next: [bind a model to React with `View.make`](/react/).

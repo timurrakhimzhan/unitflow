@@ -13,7 +13,7 @@ query-search/      Query-driven async search with an injected Effect service
 kanban-board/      Keyed child models, Model.list, nested Views, list disposal
 paginated-table/   Paginated Query table with a nested paginated hover popover
 optimistic-todos/  Optimistic updates with rollback from plain Store + Mutation
-router-basic/      Typed routes, route units gating page Queries, Link/RouterView
+router-basic/      Typed routes, middleware-fed page models, Link/RouterView
 router-guard/      Router middleware: auth gate with typed Provides and redirects
 ```
 

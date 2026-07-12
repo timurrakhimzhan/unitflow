@@ -5,9 +5,9 @@ models, and lifetime.
 
 ```ts
 export class CounterModel extends Model.Service<CounterModel>()("docs/counter")({
-  make: Effect.gen(function* () {
+  make: () => Effect.gen(function* () {
     const count = Store.make(0);
-    const increment = yield* Event.make<void>().pipe(
+    const increment = yield* Event.input<void>().pipe(
       Event.handler(() => Store.update(count, (value) => value + 1)),
     );
 
@@ -39,7 +39,8 @@ const child = yield* Model.get(ChildModel);
 Both are provided through layers, so tests can replace services or child models
 with fakes.
 
-Keyed models use `<Key>()` and flat keys.
+Keyed models use `<Key>()`. Keys may be primitives or immutable plain-data
+records and arrays, including nested structures.
 
 ```ts
 export class TaskModel extends Model.Service<TaskModel>()("docs/task")<{

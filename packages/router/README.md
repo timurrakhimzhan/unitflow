@@ -1,9 +1,8 @@
 # @unitflow/router
 
-Effect-native, model-first typed router for Unitflow. Routes declare **paths
-and codecs** — never components, loaders, or data; nesting is declared, never
-inferred from a shared path prefix; React meets the router in exactly one
-place.
+Effect-native, model-first typed router for Unitflow. Routes declare paths,
+codecs, hierarchy, and middleware contracts; implementations and components
+stay in models and layers. React meets the router in exactly one place.
 
 ## Install
 
@@ -21,10 +20,17 @@ import * as Schema from "effect/Schema";
 import { Route, Router } from "@unitflow/router";
 
 const HomeRoute = Route.make("home", { path: "/" });
+interface User {
+  readonly id: number;
+  readonly name: string;
+}
+class UserLoader extends Router.Middleware<UserLoader>()("app/UserLoader")<{
+  readonly user: User;
+}>() {}
 const UserRoute = Route.make("user", {
   path: "/users/:id",
   params: Schema.Struct({ id: Schema.NumberFromString }),
-});
+}).pipe(Route.middleware(UserLoader));
 
 export const AppRouter = Router.make("app/router", Route.group(HomeRoute, UserRoute));
 
@@ -44,7 +50,9 @@ is the structural alternative, no `declare module` needed.
   `outputs.state`/`location`, `buildHref`/`buildLocation`.
 - `AppRouter.routeModel` — keyed by route id: `Model.get(AppRouter.routeModel, "user")`
   returns that route's unit — `outputs.opened`/`params`/`search`/`provided`,
-  narrowed to **that route's** schemas.
+  narrowed to **that route's** schemas. This is mainly for long-lived
+  observers outside a matched page; route pages should normally consume
+  middleware output as their keyed-model construction value.
 - `AppRouter.layer` — the two models' layers, already merged. Still needs a
   history layer (`Router.browserHistoryLayer`, or `memoryHistoryLayer` in
   tests) and any page models' own layers.
@@ -81,26 +89,25 @@ const allRoutes = Route.group(HomeRoute, UserRoute, ProjectRoute);
 Two routes with a shared literal path prefix that were never `addChild`-linked
 simply don't nest — the group is flat unless the hierarchy says otherwise.
 
-## `Route.middleware`: guards as services
+## `Route.middleware`: guards and loaders as services
 
-`middleware` attaches a guard TAG to every route currently in a group. A
-guard runs **before** a navigation commits — a blocked URL never reaches
-history or state — and its success value (its **Provides**) lands typed in
-the guarded route's `provided` port:
+`middleware` attaches a Context-service tag to every route currently in a
+group. It runs **before** navigation commits, so it can guard access or load
+one-shot route data. A failure prevents the URL from reaching history/state;
+its success value (`Provides`) becomes the route's typed `Route.Output`:
 
 ```ts
 class AuthGuard extends Router.Middleware<AuthGuard>()("app/AuthGuard")<{
   readonly user: string;
 }>() {}
 
-const AuthGuardLive = AuthGuard.layer((context) =>
+const AuthGuardLive = AuthGuard.layer(() =>
   Effect.gen(function* () {
     const session = yield* SessionService; // the GUARD's dependency, not the router's
     const user = yield* session.currentUser;
     if (Option.isNone(user)) {
       return yield* Effect.fail(new Router.RedirectError({ options: { to: "/login" } }));
     }
-    void context; // params/search/location of the matched route
     return { user: user.value };
   }),
 );
@@ -149,7 +156,9 @@ React meets the router in exactly one place: `RouterView.make` takes
 import { View } from "@unitflow/react";
 import { Link, RouterView } from "@unitflow/router/react";
 
-const UserPage = View.make(UserPageModel, ({ user }) => /* AsyncResult → JSX */);
+// UserPageModel is keyed by Route.Output<typeof UserRoute>; the third
+// argument makes the View self-leasing, so middleware output is its key.
+const UserPage = View.make(UserPageModel, ({ user }) => /* JSX */, {});
 
 export const AppView = RouterView.make(AppRouter.model, {
   routes: {
@@ -161,7 +170,7 @@ export const AppView = RouterView.make(AppRouter.model, {
         {children}
       </main>
     ),
-    user: UserPage, // a View.make component IS its own entry
+    user: UserPage, // middleware succeeds → model lease starts → view renders
   },
   notFound: () => <div>404</div>,
 });
@@ -212,7 +221,7 @@ Import these from your routes module instead of `@unitflow/router/react`'s.
 - [Routes and Schemas](https://github.com/timurrakhimzhan/unitflow/blob/main/src/content/docs/router/routes.md) —
   path/search params, groups, nesting with `Route.addChild`/`Route.layout`.
 - [The AppRouter Models](https://github.com/timurrakhimzhan/unitflow/blob/main/src/content/docs/router/models.md) —
-  `model` vs `routeModel`, navigating, page data as a `Query` gated on route ports.
+  middleware-fed keyed page models, route observers, navigation, and history.
 - [React](https://github.com/timurrakhimzhan/unitflow/blob/main/src/content/docs/router/react.md) —
   the views map, nesting it to mirror the route table, mounting.
 - [Middleware](https://github.com/timurrakhimzhan/unitflow/blob/main/src/content/docs/router/middleware.md) —

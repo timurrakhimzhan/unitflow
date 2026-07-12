@@ -29,7 +29,7 @@ export class TaskModel extends Model.Service<TaskModel>()("examples/task")<TaskK
 
 ```ts
 export class BoardModel extends Model.Service<BoardModel>()("examples/board")({
-  make: Effect.gen(function* () {
+  make: () => Effect.gen(function* () {
     const draft = Store.make("");
     const tasks = yield* Model.list(TaskModel);
     const taskStates = tasks.select((task) => task.outputs.state);

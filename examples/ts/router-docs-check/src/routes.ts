@@ -10,12 +10,23 @@ export const LoginRoute = Route.make("login", { path: "/login" });
 // #endregion declare
 
 // #region params
-const userParams = Schema.Struct({ id: Schema.NumberFromString });
+export const userParams = Schema.Struct({ id: Schema.NumberFromString });
+
+export interface User {
+  readonly id: number;
+  readonly name: string;
+}
+
+/** Loading is part of navigation. A successful middleware provides the
+ * decoded route's data to the page model before the route commits. */
+export class UserLoader extends Router.Middleware<UserLoader>()("docs/UserLoader")<{
+  readonly user: User;
+}>() {}
 
 export const UserRoute = Route.make("user", {
   path: "/users/:id",
   params: userParams,
-});
+}).pipe(Route.middleware(UserLoader));
 // Without a schema, params stay raw strings typed from the path:
 export const FileRoute = Route.make("file", { path: "/files/*path" });
 export const DraftRoute = Route.make("draft", { path: "/drafts/:id?" });

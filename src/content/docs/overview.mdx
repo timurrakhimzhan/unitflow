@@ -114,7 +114,7 @@ export class TaskModel extends Model.Service<TaskModel>()(
 export class BoardModel extends Model.Service<BoardModel>()(
   "examples/task-board/board",
 )({
-  make: Effect.gen(function* () {
+  make: () => Effect.gen(function* () {
     const draft = Store.make("");
     const tasks = yield* Model.list(TaskModel);
 

@@ -1,34 +1,42 @@
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { Model, Query } from "@unitflow/react";
+import { Model, Store } from "@unitflow/react";
 import { Route, Router } from "@unitflow/router";
-import { UsersApi } from "./api";
+import { UsersApi, type User } from "./api";
 
 const userParams = Schema.Struct({ id: Schema.NumberFromString });
 const userSearch = Schema.Struct({ page: Schema.NumberFromString });
-/** An OBJECT inside the query string: one JSON-encoded param. */
 const usersFilter = Schema.Struct({ role: Schema.String });
 const usersSearch = Schema.Struct({
   filter: Schema.optionalKey(Schema.fromJsonString(usersFilter)),
 });
 
-/** Routes declare paths and codecs only. */
+export class UsersLoader extends Router.Middleware<UsersLoader>()(
+  "@unitflow/example/router-basic/UsersLoader",
+)<{
+  readonly users: ReadonlyArray<User>;
+  readonly search: Schema.Schema.Type<typeof usersSearch>;
+}>() {}
+
+export class UserLoader extends Router.Middleware<UserLoader>()(
+  "@unitflow/example/router-basic/UserLoader",
+)<{
+  readonly user: User;
+  readonly params: Schema.Schema.Type<typeof userParams>;
+  readonly search: Schema.Schema.Type<typeof userSearch>;
+}>() {}
+
 export const HomeRoute = Route.make("home", { path: "/" });
-/** `path` is relative to `UsersRoute` below — `Route.addChild` joins it: the
- * declared table ends up with `/users/:id`, not `/:id`. */
 export const UserRoute = Route.make("user", {
   path: "/:id",
   params: userParams,
   search: userSearch,
-});
-/** `/users/:id` is a real child PAGE of `/users` — declared explicitly via
- * `addChild`, never inferred from the shared path prefix. */
-export const UsersRoute = Route.make("users", { path: "/users", search: usersSearch }).pipe(
-  Route.addChild(UserRoute),
-);
+}).pipe(Route.middleware(UserLoader));
+export const UsersRoute = Route.make("users", {
+  path: "/users",
+  search: usersSearch,
+}).pipe(Route.middleware(UsersLoader), Route.addChild(UserRoute));
 
-/** Router.make births the whole AppRouter at once; the app only names it. */
 export const AppRouter = Router.make(
   "@unitflow/example/router-basic/router",
   Route.group(HomeRoute, UsersRoute),
@@ -40,61 +48,67 @@ declare module "@unitflow/router" {
   }
 }
 
-/** Loads the directory while `/users` is on screen: the query's only
- * dependency is the route unit's `opened` port. */
+/** The list is loaded before /users commits. The decoded search value is
+ * returned with the data, becoming the page model's exact construction key. */
+export const UsersLoaderLive = UsersLoader.layer((context) =>
+  Effect.gen(function* () {
+    if (!Schema.is(usersSearch)(context.search)) {
+      return yield* Effect.fail(new Router.NotFoundError({}));
+    }
+    const api = yield* UsersApi;
+    const users = yield* api.list();
+    const role = context.search.filter?.role;
+    return {
+      users: role === undefined ? users : users.filter((user) => user.role === role),
+      search: context.search,
+    };
+  }),
+);
+
+/** The detail resource is also resolved before commit. An API miss becomes a
+ * router not-found result instead of a page model's synthetic "closed" state. */
+export const UserLoaderLive = UserLoader.layer((context) => {
+  const params = context.params;
+  const search = context.search;
+  if (!Schema.is(userParams)(params) || !Schema.is(userSearch)(search)) {
+    return Effect.fail(new Router.NotFoundError({}));
+  }
+  return Effect.gen(function* () {
+    const api = yield* UsersApi;
+    const user = yield* api.get(params.id).pipe(
+      Effect.mapError(() => new Router.NotFoundError({})),
+    );
+    return { user, params, search };
+  });
+});
+
 export class UsersPageModel extends Model.Service<UsersPageModel>()(
   "@unitflow/example/router-basic/UsersPage",
-)({
-  make: () =>
+)<Route.Output<typeof UsersRoute>>()({
+  make: ({ users, search }) =>
     Effect.gen(function* () {
-      const unit = yield* Model.get(AppRouter.routeModel, "users");
-      const list = yield* Query.make({
-        // The decoded search object is a plain dependency: changing
-        // ?filter={"role":...} re-runs the query.
-        stores: { opened: unit.outputs.opened, search: unit.outputs.search },
-        handler: ({ opened, search }) =>
-          opened
-            ? Effect.gen(function* () {
-                const api = yield* UsersApi;
-                const users = yield* api.list();
-                const role = Option.flatMapNullishOr(search, (s) => s.filter?.role);
-                return Option.isNone(role)
-                  ? users
-                  : users.filter((user) => user.role === role.value);
-              })
-            : Effect.fail("closed" as const),
-      });
+      const list = Store.make(users);
+      const routeSearch = Store.make(search);
       return {
         inputs: {},
-        outputs: { list: list.state },
-        ui: { list: list.state, search: unit.outputs.search, reload: list.refresh },
+        outputs: { list, search: routeSearch },
+        ui: { list, search: routeSearch },
       };
     }),
 }) {}
 
-/** Loads one user while `/users/:id` is on screen. `params` arrives decoded
- * (`id: number`) — changing the id re-runs the query automatically. */
 export class UserPageModel extends Model.Service<UserPageModel>()(
   "@unitflow/example/router-basic/UserPage",
-)({
-  make: () =>
+)<Route.Output<typeof UserRoute>>()({
+  make: ({ user, params, search }) =>
     Effect.gen(function* () {
-      const unit = yield* Model.get(AppRouter.routeModel, "user");
-      const user = yield* Query.make({
-        stores: { params: unit.outputs.params },
-        handler: ({ params }) =>
-          Option.isNone(params)
-            ? Effect.fail("closed" as const)
-            : Effect.gen(function* () {
-                const api = yield* UsersApi;
-                return yield* api.get(params.value.id);
-              }),
-      });
+      const profile = Store.make(user);
+      const routeParams = Store.make(params);
+      const routeSearch = Store.make(search);
       return {
         inputs: {},
-        outputs: { user: user.state },
-        ui: { user: user.state, params: unit.outputs.params, search: unit.outputs.search },
+        outputs: { profile },
+        ui: { profile, params: routeParams, search: routeSearch },
       };
     }),
 }) {}
-

@@ -22,7 +22,7 @@ Singleton models live until `Model.dispose(...)` or registry shutdown.
 export class SessionModel extends Model.Service<SessionModel>()(
   "docs/session",
 )({
-  make: Effect.gen(function* () {
+  make: () => Effect.gen(function* () {
     return { inputs: {}, outputs: {}, ui: {} };
   }),
 }) {}

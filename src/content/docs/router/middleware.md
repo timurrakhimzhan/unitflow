@@ -1,28 +1,24 @@
 ---
 title: "Router: Middleware"
-description: Guards as Context services — blocking navigation before it commits, redirecting, and providing typed data to guarded routes.
+description: Run access checks and one-shot loaders before navigation commits, then feed typed output into page models.
 ---
 
-Middleware guards navigation. A guard runs for every matched route it is
-attached to **before the navigation commits**: a blocked URL never reaches
-history or state, not even for a frame.
+Middleware is the route's pre-commit pipeline. It can check access, redirect,
+return not-found, load one-shot data, or add request context. The target route
+does not enter history or router state until every matched middleware succeeds.
 
-Two design decisions matter here:
+A middleware is a Context-service tag. The route table requires the tag; its
+implementation and dependencies live in a layer. Its success type is its
+`Provides`, accumulated into the route's `Route.Output`.
 
-- a guard is a **Context service (a tag)**, not a function. The router only
-  ever requires the tag; the implementation — and its dependencies — live
-  in a layer composed at the feature level. Guard dependencies never leak
-  into the router's type.
-- a guard's success value is its **Provides**: it lands, fully typed, in
-  the guarded route's unit.
-
-## Declaring a Guard
+## Declare Middleware Contracts
 
 ```ts
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { Model, Store } from "@unitflow/core";
+import { View } from "@unitflow/react";
 import { Route, Router } from "@unitflow/router";
 
 interface SessionShape {
@@ -32,63 +28,64 @@ export class SessionService extends Context.Service<SessionService, SessionShape
   "docs/Session",
 ) {}
 
-/** The guard is a TAG. `<{ user: string }>` declares what it PROVIDES. */
 export class AuthGuard extends Router.Middleware<AuthGuard>()("docs/AuthGuard")<{
   readonly user: string;
 }>() {}
+
+export class AuditContext extends Router.Middleware<AuditContext>()("docs/AuditContext")<{
+  readonly auditId: string;
+}>() {}
 ```
 
-## Implementing It
+The router sees only `AuthGuard` and `AuditContext`. It does not inherit their
+implementation dependencies.
 
-`layer` builds the implementation layer. `MiddlewareHandler` has no
-requirements channel — a guard reading live state (`Store.get`, `Model.get`)
-needs services on every call, not just once — so `layer` resolves the
-handler's own services once at layer build and captures them, keeping the
-stored handler dependency-free while it still runs fresh Effect code per
-call. Failing with `RedirectError` (or `NotFoundError`) cancels the
-navigation.
+## Implement the Tags in Layers
+
+`Middleware.layer` captures the handler's Effect services when the layer is
+built while still executing fresh handler logic on each navigation:
 
 ```ts
-export const AuthGuardLive = AuthGuard.layer((context) =>
+export const AuthGuardLive = AuthGuard.layer(() =>
   Effect.gen(function* () {
-    const session = yield* SessionService; // the GUARD's dependency, not the router's
+    const session = yield* SessionService;
     const user = yield* session.currentUser;
     if (Option.isNone(user)) {
-      // typed against the registered router; cancels the navigation BEFORE
-      // it commits — the blocked URL never flashes
-      return yield* Effect.fail(new Router.RedirectError({ options: { to: "/login" } }));
+      return yield* Effect.fail(
+        new Router.RedirectError({ options: { to: "/login" } }),
+      );
     }
-    void context; // params/search/location of the matched route
-    return { user: user.value }; // Provides
+    return { user: user.value };
   }),
+);
+
+export const AuditContextLive = AuditContext.layer(() =>
+  Effect.succeed({ auditId: "admin-navigation" }),
 );
 ```
 
-For a guard with no per-call reactive reads, a plain `Layer.effect(Tag, ...)`
-works too — `layer` only earns its keep once the handler needs to see fresh
-state on every navigation, not just what was true when the layer built.
+Redirects and `NotFoundError` work for link navigation, initial deep links,
+and browser back/forward. A rejected URL never flashes as the active route.
 
-Redirects also fire on the **initial load** and on browser back/forward: a
-direct deep link into a guarded URL lands on the redirect target, never on
-the guarded page.
+## Attach Middleware to Routes
 
-## Attaching to Routes
-
-`middleware` attaches the tag to every route currently in a group — the
-same composition shape as `add`/`merge`/`prefix`. Attaching it to a route
-with declared children (via [`Route.addChild`/`Route.layout`](/router/routes/#nesting-routeaddchild-and-routelayout))
-guards the whole branch: `resolveMatches` walks the explicit ancestor chain,
-so the guard runs once per navigation into that route OR any of its
-descendants — group-wide `middleware` is only needed for independent routes
-with no shared parent.
+Attach tags with route combinators. Several middleware on one route run
+sequentially by default; opt into concurrency only when they are independent:
 
 ```ts
-const DashboardRoute = Route.make("dashboard", { path: "/dashboard" });
-const MembersRoute = Route.make("members", { path: "/members" });
+export const DashboardRoute = Route.make("dashboard", {
+  path: "/dashboard",
+}).pipe(
+  Route.middleware(AuthGuard),
+  Route.middleware(AuditContext),
+  Route.middlewaresConcurrency("unbounded"),
+);
 
-const adminRoutes = Route.group(DashboardRoute, MembersRoute)
-  .middleware(AuthGuard)
-  .prefix("/admin");
+const MembersRoute = Route.make("members", { path: "/members" }).pipe(
+  Route.middleware(AuthGuard),
+);
+
+const adminRoutes = Route.group(DashboardRoute, MembersRoute).prefix("/admin");
 
 export const AdminRouter = Router.make(
   "docs/admin-router",
@@ -96,142 +93,61 @@ export const AdminRouter = Router.make(
 );
 ```
 
-Forget `AuthGuardLive` in the layer composition and `AdminRouter.layer` does
-not typecheck — a missing guard is a compile error, not a runtime surprise.
+`Route.group(...).middleware(AuthGuard)` is shorthand for attaching the tag to
+every route currently in that group. When a guarded route is an explicit
+`addChild`/`layout` ancestor, its middleware already covers descendants. Parent
+middleware always runs before child middleware.
 
-## Running Guards Concurrently
+`middlewaresConcurrency` affects middleware attached at the same route level
+only. Parent and child levels remain ordered so a parent redirect prevents
+child work from starting.
 
-Several guards on one route run sequentially by default. When they're
-independent of each other — a session check and an unrelated preload, say —
-`Route.middlewaresConcurrency` lets them run in parallel instead:
+## Consume `Route.Output` in the Page Model
 
-```ts
-const DashboardRoute = Route.make("dashboard", { path: "/dashboard" }).pipe(
-  Route.middleware(AuthGuard),
-  Route.middleware(PreloadDashboardData),
-  Route.middlewaresConcurrency("unbounded"),
-);
-```
-
-Also available on a group, applying to every route in it independently:
+Do not construct a page singleton and then read `route.outputs.provided` as an
+`Option`. The route could not have opened without successful middleware. Key
+the page model by that proof instead:
 
 ```ts
-const adminRoutes = Route.group(DashboardRoute, MembersRoute)
-  .middleware(AuthGuard)
-  .middlewaresConcurrency("unbounded");
-```
-
-This only affects guards attached to the SAME route (or group) — guards
-across different levels of a nested route (a parent's vs. a child's) still
-always run parent-first, in order, so a parent's redirect still cancels the
-navigation before any child guard runs.
-
-## Reading the Provides
-
-The guard's return value lands in the guarded route's unit as the
-`provided` port. The guarantee is constructive: the route can only be open
-because the guard passed, so `provided` is `Option.some` whenever `opened`
-is `true`.
-
-```ts
-const readProvided = Effect.gen(function* () {
-  const unit = yield* Model.get(AdminRouter.routeModel, "dashboard");
-  const provided = yield* Store.get(unit.outputs.provided);
-  // Option.some({ user }) whenever the route is open: the guard passing is
-  // what LET it open
-  if (Option.isSome(provided)) {
-    const user: string = provided.value.user;
-    void user;
-  }
-});
-```
-
-Several guards on one route merge their Provides (`P1 & P2`). Inside a view
-map, the same data is available as `match.provided` on the guarded route's
-match.
-
-## Getting Provides Into a Page Model
-
-Reading `unit.outputs.provided` from inside a page model works, but it
-duplicates the `Option.isSome` check the guard already did — the model
-can't be open unless the guard already passed. It also only ever settles
-AFTER the model already exists — no good for data a page model needs on the
-very first line of its own `make`, like a Query dependency.
-
-Key the page model by its route's own `Route.Output` instead, and pair it
-with `View.make`'s [self-leasing overload](/react/#lease-a-model-directly)
-— the model is leased lazily, exactly when the route first matches, with
-the guard's Provides as the construction argument. `RouterView.make`
-recognizes it automatically, no separate router-specific export needed:
-
-```ts
-import { View } from "@unitflow/react";
-
-// Keyed by the route's own Output — `user` arrives on the very first line
-// of make(): no placeholder, no Option. The model isn't constructed AT ALL
-// until the guard has already provided it, so there's nothing to wire.
 export class DashboardPageModel extends Model.Service<DashboardPageModel>()(
   "docs/DashboardPage",
-)<{ readonly user: string }>()({
-  make: ({ user }) =>
+)<Route.Output<typeof DashboardRoute>>()({
+  make: ({ user, auditId }) =>
     Effect.gen(function* () {
-      const greeting = Store.make(`Hello, ${user}`);
-      return { inputs: {}, outputs: {}, ui: { greeting } };
+      const greeting = Store.make(`Hello, ${user} (${auditId})`);
+      return { inputs: {}, outputs: { greeting }, ui: { greeting } };
     }),
 }) {}
 
-// The third argument (`{}`) is what makes this View lease its model
-// ITSELF, by key — the router feeds the matched route's own Output in.
-export const DashboardView = View.make(DashboardPageModel, ({ greeting }) => greeting, {});
-```
-
-The key must match the route's `Route.Output` exactly — a model keyed by
-the wrong type, wired into the wrong route id, fails to compile at the
-`RouterView.make({ routes: {...} })` call site, the same way a mismatched
-`inputs` field used to. This is also how a future loader would plug in: as
-a middleware that provides the fetched data, arriving as the model's key.
-
-## Don't Fetch Reactively Inside a Guard
-
-A guard re-runs its handler on every navigation into the route it guards —
-there is no per-route-id caching the way a model instance has. Calling
-`Query.make` (or `Registry.run`, `Event.handler`, `Store.forwardTo`,
-`Event.forwardTo`) directly inside a guard forks a fresh, ongoing pipeline
-on every single navigation, and none of the earlier ones ever get cleaned
-up — a real, unbounded leak on a frequently-revisited route. The library
-catches this at compile time: those all require `InstanceScope`, which is
-only ever injected inside a model's own `make()`, never available composing
-a guard's layer into an app.
-
-Lease a keyed model that owns the `Query` instead, by whatever identity
-should decide "same fetch, reuse" versus "different fetch, refetch" (a
-decoded search param, in a real guard — this example fixes the key):
-
-```ts
-class UsersListModel extends Model.Service<UsersListModel>()(
-  "docs/UsersList",
-)<string>()({
-  make: (search) =>
-    Effect.gen(function* () {
-      const q = yield* Query.make({ handler: () => fetchUsers(search) });
-      return { inputs: {}, outputs: { users: q.state }, ui: {} };
-    }),
-}) {}
-
-class UsersGuard extends Router.Middleware<UsersGuard>()("docs/UsersGuard")<{
-  readonly users: Store.Output<AsyncResult.AsyncResult<ReadonlyArray<User>, never>>;
-}>() {}
-
-const UsersGuardLive = UsersGuard.layer(() =>
-  Effect.gen(function* () {
-    const list = yield* Model.get(UsersListModel, "all");
-    return { users: list.outputs.users };
-  }),
+export const DashboardView = View.make(
+  DashboardPageModel,
+  ({ greeting }) => greeting,
+  {},
 );
 ```
 
-`Model.get` dedupes by key on its own — re-navigating with the same
-`search.q` reuses the exact same `Query` instance, no refetch, no new
-subscription; a different `search.q` is a different key, hence a fresh one.
-The old instance ages out through the model's normal `idleTimeToLive` once
-nothing leases it anymore.
+The router merges middleware output in declaration order, so this route's
+output is `{ user: string } & { auditId: string }`. `RouterView` leases the
+model only after both values exist. A missing middleware layer or mismatched
+page-model key fails at compile time.
+
+## Loading Data
+
+A one-shot request is valid middleware work: fetch the resource, map domain
+errors to `RedirectError`/`NotFoundError`, and return the resource as
+`Provides`. The [models page](/router/models/#load-during-navigation) shows a
+complete parametric `UserLoader`.
+
+Do not call `Query.make`, `Event.handler`, `Store.forwardTo`, or other ongoing
+reactive constructors inside middleware. Middleware runs again on every
+navigation and does not own an instance lifetime, so that would create a new
+pipeline on every visit. The type system rejects these APIs there because they
+require `InstanceScope`.
+
+When data needs refresh, polling, or reactive dependencies, put the `Query` in
+a keyed model. Middleware may lease that model with `Model.get` and provide its
+stable output store, or it may perform the initial one-shot fetch and let the
+route-fed page model own subsequent refreshes. In both designs, the model owns
+subscription lifetime and cleanup.
+
+Next: [turning middleware output into page models](/router/models/).

@@ -51,7 +51,7 @@ const saveProject = (input: SaveInput) =>
 export class ProjectFormModel extends Model.Service<ProjectFormModel>()(
   "docs/project-form",
 )({
-  make: Effect.gen(function* () {
+  make: () => Effect.gen(function* () {
     const save = yield* Mutation.make(saveProject);
 
     return {

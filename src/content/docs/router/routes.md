@@ -3,9 +3,9 @@ title: "Router: Routes and Schemas"
 description: Declaring routes, typing path params and search params with Schema, composing groups, and creating the router.
 ---
 
-`@unitflow/router` is a model-first router: routes declare **paths and
-codecs** — never components, loaders, or data. Everything else in the app
-reads route state through ordinary model ports.
+`@unitflow/router` is a model-first router: routes declare paths, codecs, and
+the middleware that must finish before a match commits. Components and model
+implementations stay outside the route table.
 
 ```sh
 pnpm add @unitflow/router @unitflow/react @unitflow/core effect@4.0.0-beta.88
@@ -19,7 +19,7 @@ router (a duplicate is a construction-time error).
 
 ```ts
 import * as Schema from "effect/Schema";
-import { Route } from "@unitflow/router";
+import { Route, Router } from "@unitflow/router";
 
 export const HomeRoute = Route.make("home", { path: "/" });
 export const LoginRoute = Route.make("login", { path: "/login" });
@@ -32,20 +32,32 @@ strings, typed from the path literal. With a `params` schema the raw
 strings decode into typed values — and encode back when building links.
 
 ```ts
-const userParams = Schema.Struct({ id: Schema.NumberFromString });
+export const userParams = Schema.Struct({ id: Schema.NumberFromString });
+
+export interface User {
+  readonly id: number;
+  readonly name: string;
+}
+
+export class UserLoader extends Router.Middleware<UserLoader>()("docs/UserLoader")<{
+  readonly user: User;
+}>() {}
 
 export const UserRoute = Route.make("user", {
   path: "/users/:id",
   params: userParams,
-});
+}).pipe(Route.middleware(UserLoader));
 // Without a schema, params stay raw strings typed from the path:
 export const FileRoute = Route.make("file", { path: "/files/*path" });
 export const DraftRoute = Route.make("draft", { path: "/drafts/:id?" });
 ```
 
-`/users/42` matches `UserRoute` with `params` decoded to `{ id: 42 }` — a
-`number`, because `NumberFromString` said so. `*path` captures the rest of
-the URL, `:id?` makes a segment optional.
+`/users/42` first decodes params to `{ id: 42 }`, then runs `UserLoader`.
+The middleware's implementation is supplied later as a layer; its successful
+`{ user }` result becomes `Route.Output<typeof UserRoute>`. The page model can
+therefore start with real route data instead of observing optional route
+stores. `*path` captures the rest of the URL, and `:id?` makes a segment
+optional.
 
 ## Search Params
 
@@ -149,5 +161,4 @@ declare module "@unitflow/router" {
 }
 ```
 
-What `model` and `routeModel` are — and how pages consume them — is the
-subject of [the next section](/router/models/).
+Next: [implementing guards and loaders as middleware](/router/middleware/).

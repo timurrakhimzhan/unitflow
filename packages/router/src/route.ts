@@ -8,6 +8,11 @@
  * `Router.Middleware`, `Router.RedirectError`/`NotFoundError`, and the
  * history layers.
  */
+import type { Route as RouteDefinition } from "./router.js";
+
+/** What the matched branch's middleware provides to a route-fed page model. */
+export type Output<R extends RouteDefinition.Any> = RouteDefinition.Output<R>;
+
 export {
   type AnyRouteGroup,
   type Route,

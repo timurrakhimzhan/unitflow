@@ -1,156 +1,189 @@
 ---
-title: "Router: The AppRouter Models"
-description: AppRouter.model and AppRouter.routeModel — navigating through events, reading route state through ports, and gating page data with Query.
+title: "Router: Models and Route Data"
+description: Feed route data through middleware into keyed page models, observe route state, navigate through events, and compose history layers.
 ---
 
-`Router.make` returns one `AppRouter`, wrapping two ordinary Unitflow
-models plus their composed layer. There is no controller object and no
-hooks: actions are input events, state is output stores — exactly like
-every other model in the system.
+`Router.make` returns an `AppRouter` made of ordinary Unitflow models:
 
-- **`AppRouter.model`** — the engine. `inputs.navigate` drives transitions,
-  `outputs.state`/`location` expose where the app is. `buildHref` and
-  `buildLocation` live on the model value.
-- **`AppRouter.routeModel`** — keyed by route id.
-  `Model.get(AppRouter.routeModel, "user")` returns that route's unit:
-  occupancy and decoded params/search, narrowed to **that route's** schemas.
-- **`AppRouter.layer`** — `routeModel.layer` merged with `model.layer` (the
-  composition every app previously wrote by hand). Still requires a history
-  layer and any page models' own layers.
+- **`AppRouter.model`** is the navigation engine. Its `navigate` input changes
+  location; its output stores expose router state and the current location.
+- **`AppRouter.routeModel`** is keyed by route id. It exposes live
+  `opened`/`params`/`search`/`provided` stores for long-lived observers such as
+  breadcrumbs and analytics.
+- **`AppRouter.layer`** composes both models. The application still chooses a
+  history layer and supplies every middleware and page-model layer.
 
-## Route Units
+For a routed page, the normal data flow is not “construct a singleton, then
+wait for `Option.some(params)`”. Let middleware finish the navigation and
+provide the page's real construction key:
+
+```text
+route match -> middleware -> Route.Output -> keyed page model -> View
+```
+
+## Load During Navigation
+
+The `UserRoute` from the previous page has a `UserLoader` middleware attached.
+Its implementation receives the decoded route context, fetches the user, and
+maps an application-level miss to the router's typed `NotFoundError`:
 
 ```ts
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import { Event, Model, Query, Registry, Store } from "@unitflow/core";
-import { Router } from "@unitflow/router";
-import { AppRouter } from "./routes";
+import * as Schema from "effect/Schema";
+import { Event, Model, Registry, Store } from "@unitflow/core";
+import { Route, Router } from "@unitflow/router";
+import { AppRouter, UserLoader, UserRoute, userParams, type User } from "./routes";
 
-const program = Effect.gen(function* () {
-  const unit = yield* Model.get(AppRouter.routeModel, "user");
+declare const fetchUser: (id: number) => Effect.Effect<User, "not found">;
 
-  const opened = yield* Store.get(unit.outputs.opened); // boolean
-  const params = yield* Store.get(unit.outputs.params); // Option<{ id: number }>
-  const search = yield* Store.get(unit.outputs.search); // Option (this route has none)
-
-  if (Option.isSome(params)) {
-    const id: number = params.value.id; // decoded by the schema
-    void id;
+export const UserLoaderLive = UserLoader.layer((context) => {
+  if (!Schema.is(userParams)(context.params)) {
+    return Effect.fail(new Router.NotFoundError({}));
   }
-  void opened;
-  void search;
+  return fetchUser(context.params.id).pipe(
+    Effect.map((user) => ({ user })),
+    Effect.mapError(() => new Router.NotFoundError({})),
+  );
 });
 ```
 
-Every port is an `Option`: `none` while the route is off screen, `some`
-while it is open. The ports are live stores — they change on every
-navigation, so anything combined from them reacts automatically.
+`MiddlewareContext` is intentionally route-agnostic because the same tag can
+be attached to several routes. `Schema.is` narrows the reusable handler to the
+contract it supports; the router has already decoded the value before calling
+it.
 
-## Page Data: a Model Gated on Route Ports
+Navigation commits only after this effect succeeds. A failure never briefly
+opens the page or writes the rejected URL to history.
 
-There are no loaders. A page's data belongs to the page's own model, and
-the route unit's ports are ordinary `Query` dependencies: entering the
-route loads, changing the id reloads, leaving fails the query into a
-`"closed"` state.
+## Build the Page Model from `Route.Output`
+
+The page model is keyed by exactly what its route's middleware provides. It is
+constructed lazily on a successful match, so `make` receives a real `User` on
+its first line—no placeholder, no `Option`, and no synthetic `"closed"`
+failure. From there it is a normal model with state and inputs:
 
 ```ts
-interface User {
-  readonly id: number;
-  readonly name: string;
-}
-declare const fetchUser: (id: number) => Effect.Effect<User, "not found">;
-
-export class UserPageModel extends Model.Service<UserPageModel>()("docs/UserPage")({
-  make: () =>
+export class UserPageModel extends Model.Service<UserPageModel>()(
+  "docs/UserPage",
+)<Route.Output<typeof UserRoute>>()({
+  make: ({ user }) =>
     Effect.gen(function* () {
-      const unit = yield* Model.get(AppRouter.routeModel, "user");
-      const user = yield* Query.make({
-        stores: { params: unit.outputs.params },
-        handler: ({ params }) =>
-          Option.isNone(params)
-            ? Effect.fail("closed" as const)
-            : fetchUser(params.value.id),
-      });
+      const profile = Store.make(user);
+      const rename = yield* Event.input<string>().pipe(
+        Event.handler((name) =>
+          Store.update(profile, (current) => ({ ...current, name })),
+        ),
+      );
       return {
-        inputs: {},
-        outputs: {},
-        ui: { user: user.state, refresh: user.refresh },
+        inputs: { rename },
+        outputs: { profile },
+        ui: { profile, rename },
       };
     }),
 }) {}
 ```
 
-Revalidation is per page — `Event.emit(model.ui.refresh)` — not a global
-router invalidate.
+The `View.make(Model, render, {})` self-leasing overload connects this keyed
+model to `RouterView`; the React page shows the complete wiring on the next
+page. If the middleware output and model key disagree, the routes map does not
+compile.
 
-## Navigating
+Use a `Query` inside this model when the page owns ongoing refresh, polling, or
+reactive dependencies. Do not create an ongoing `Query` inside middleware:
+middleware runs once per navigation, while model lifetime owns subscriptions
+and cleanup.
 
-Navigation is an event, like any model input. When a program needs the
-outcome, it waits on the state store — the same idiom as waiting on a
-query.
+## Observe a Route Outside Its Page
 
-```ts
-const goToUser = Effect.gen(function* () {
-  const nav = yield* Model.get(AppRouter.model);
-
-  yield* Event.emit(nav.inputs.navigate, {
-    to: "/users/:id",
-    params: { id: 42 }, // number: encoded by the schema on the way out
-  });
-
-  // navigation is an event; when a program needs the result, wait on state
-  yield* Store.waitFor(nav.outputs.state, (state) => state.status !== "pending");
-  const location = yield* Store.get(nav.outputs.location);
-  void location.pathname; // "/users/42"
-});
-```
-
-`to` is constrained to the router's declared paths; `params` and `search`
-follow the target route's schemas. A typo in any of them does not compile.
-`to` also accepts a raw string (e.g. a `?redirect=` value read back off the
-URL, not one of the router's own declared paths) — useful for
-redirect-after-login, where the target was never a compile-time literal:
+`AppRouter.routeModel` remains useful for a model that lives independently of
+the matched page. Republish its stores as real ports instead of reading them in
+a throwaway `program`:
 
 ```ts
-yield* Event.emit(nav.inputs.navigate, { to: redirectTarget }); // to: string
+export class UserRouteStateModel extends Model.Service<UserRouteStateModel>()(
+  "docs/UserRouteState",
+)({
+  make: () =>
+    Effect.gen(function* () {
+      const route = yield* Model.get(AppRouter.routeModel, "user");
+      return {
+        inputs: {},
+        outputs: {
+          opened: route.outputs.opened,
+          params: route.outputs.params,
+          search: route.outputs.search,
+        },
+        ui: {
+          opened: route.outputs.opened,
+          params: route.outputs.params,
+          search: route.outputs.search,
+        },
+      };
+    }),
+}) {}
 ```
 
-A raw `to` skips `params`/`search` entirely (they don't type-check against
-an unknown target) — build the full href yourself first if you need them.
+`params` is `Option<{ id: number }>` here because this observer outlives the
+route: it is `none` off-screen and `some` while the route is matched. That is a
+useful live-state contract for a breadcrumb; it is unnecessary ceremony for a
+page that can instead be constructed from middleware output.
 
-## Building Hrefs
+## Navigate from a Model
+
+Navigation is another model input. Wrap it in a domain event rather than
+exporting a loose top-level `Effect`:
 
 ```ts
-const shareLink = Effect.gen(function* () {
-  const href = yield* AppRouter.model.buildHref({
-    to: "/users",
-    search: { page: 2, sort: "desc", filter: { role: "admin" } },
-  });
-  void href; // "/users?filter=%7B%22role%22%3A%22admin%22%7D&page=2&sort=desc"
-});
+export class NavigationModel extends Model.Service<NavigationModel>()("docs/Navigation")({
+  make: () =>
+    Effect.gen(function* () {
+      const router = yield* Model.get(AppRouter.model);
+      const openUser = yield* Event.input<number>().pipe(
+        Event.handler((id) =>
+          Event.emit(router.inputs.navigate, {
+            to: "/users/:id",
+            params: { id },
+          }),
+        ),
+      );
+      const usersHref = yield* AppRouter.model.buildHref({
+        to: "/users",
+        search: { page: 2, sort: "desc", filter: { role: "admin" } },
+      });
+      const shareHref = Store.make(usersHref);
+      return {
+        inputs: { openUser },
+        outputs: { location: router.outputs.location, shareHref },
+        ui: { openUser, shareHref },
+      };
+    }),
+}) {}
 ```
 
-## History Is a Capability
+`to` is constrained to declared paths, and `params`/`search` use the target
+route's schema input types. `buildHref` uses the same contracts and returns the
+encoded href.
 
-`Router.make` declares routes only. How locations are read and written is
-decided by the layer: `Router.browserHistoryLayer` in the app,
-`Router.hashHistoryLayer` for hash routing, `Router.memoryHistoryLayer` in
-tests. Forgetting one is a compile error, not a silent default.
+## History and Layers
+
+Routes do not choose their environment. Applications use
+`Router.browserHistoryLayer`; tests swap in memory history:
 
 ```ts
 import * as Layer from "effect/Layer";
 
-// Tests drive the router with an in-memory history:
-const testLayer = AppRouter.layer.pipe(
-  Layer.provideMerge(Router.memoryHistoryLayer({ initialEntries: ["/users/7"] })),
+export const testLayer = NavigationModel.layer.pipe(
+  Layer.provideMerge(UserPageModel.layer),
+  Layer.provideMerge(AppRouter.layer),
+  Layer.provideMerge(UserLoaderLive),
+  Layer.provideMerge(
+    Router.memoryHistoryLayer({ initialEntries: ["/users/7"] }),
+  ),
   Layer.provideMerge(Registry.layer),
 );
-
-export const test = Effect.provide(
-  Effect.all([program, goToUser, shareLink]),
-  testLayer,
-);
 ```
+
+Forgetting `UserLoaderLive` is a compile error because `AppRouter.layer`
+requires every middleware tag attached to its route table.
 
 Next: [connecting the router to React](/router/react/).

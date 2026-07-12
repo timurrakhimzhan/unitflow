@@ -50,7 +50,7 @@ const fetchProjects = Effect.succeed<ReadonlyArray<Project>>([
 export class ProjectsModel extends Model.Service<ProjectsModel>()(
   "docs/projects",
 )({
-  make: Effect.gen(function* () {
+  make: () => Effect.gen(function* () {
     const projects = yield* Query.make(fetchProjects);
 
     return {

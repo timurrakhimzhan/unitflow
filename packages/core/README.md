@@ -118,10 +118,10 @@ import { Event, Model, Store } from "@unitflow/core";
 export class CounterModel extends Model.Service<CounterModel>()(
   "readme/counter",
 )({
-  make: Effect.gen(function* () {
+  make: () => Effect.gen(function* () {
     const count = Store.make(0);
 
-    const increment = yield* Event.make<void>().pipe(
+    const increment = yield* Event.input<void>().pipe(
       Event.handler(() => Store.update(count, (value) => value + 1)),
     );
 
