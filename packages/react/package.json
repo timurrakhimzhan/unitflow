@@ -37,13 +37,13 @@
     "@unitflow/core": "workspace:^"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.88",
+    "effect": "4.0.0-beta.102",
     "react": ">=18"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0-beta.88",
+    "@effect/vitest": "4.0.0-beta.102",
     "@types/react": "*",
-    "effect": "4.0.0-beta.88",
+    "effect": "4.0.0-beta.102",
     "react": "*",
     "vitest": "3.2.4"
   }
