@@ -480,7 +480,7 @@ export type PortsFor<M extends AnyService, K> = [ShapesOf<M>] extends [never]
  * `ui` (`ui: { child }`, for a child View to bind) still compiles — nothing
  * is removed, `ui` just stops being individually readable outside `make`. A
  * model with no `ui` section at all (headless) passes through unchanged. */
-type ExternalPorts<P> = P extends { readonly ui: unknown }
+export type ExternalPorts<P> = P extends { readonly ui: unknown }
   ? Omit<P, "ui"> & { readonly ui: Record<string, unknown> }
   : P;
 

@@ -58,6 +58,26 @@ class RenderModel extends Model.Service<RenderModel>()(
     }),
 }) {}
 
+class CounterPanelModel extends Model.Service<CounterPanelModel>()(
+  "/test/view-test/CounterPanelModel",
+)({
+  make: () =>
+    Effect.gen(function* () {
+      const counter = yield* Model.get(CounterModel);
+
+      // Model composition reads precise outputs, not the View-only surface.
+      const countStore: Store.Output<number> = counter.outputs.countStore;
+      // @ts-expect-error a Model.get result keeps the child's ui values opaque
+      void Store.get(counter.ui.countStore);
+
+      return {
+        inputs: {},
+        outputs: { countStore },
+        ui: { counter },
+      };
+    }),
+}) {}
+
 describe("View.make", () => {
   it("hands the render callback bound units — values and callbacks (type-level)", () => {
     const CounterView = View.make(CounterModel, (units) => {
@@ -110,6 +130,20 @@ describe("View.make", () => {
     assert.isDefined(bareSingleton);
     assert.isDefined(bareKeyed);
     assert.isDefined(byKey);
+  });
+
+  it("forwards an opaque child unit to its matching View without a cast (type-level)", () => {
+    const CounterView = View.make(CounterModel, () => null);
+    const CounterPanelView = View.make(CounterPanelModel, ({ counter }) => {
+      const countStore: Store.Output<number> = counter.outputs.countStore;
+      void countStore;
+      // @ts-expect-error the parent View cannot use the child's opaque ui values
+      void Store.get(counter.ui.countStore);
+
+      return <CounterView unit={counter} />;
+    });
+
+    assert.isDefined(CounterPanelView);
   });
 
   it("rejects headless models — View.make requires a ui section (type-level)", () => {
