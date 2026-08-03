@@ -102,11 +102,9 @@ export class AppModel extends Model.Service<AppModel>()(
   make: () =>
     Effect.gen(function* () {
       // Forwarded whole into `ui.pages` below for AppView's own `unit`
-      // prop — AppView binds its OWN nested `ui` internally, so it needs
-      // full precision here, not the opaque shape Model.get normally hands
-      // back for plain data composition.
-      // eslint-disable-next-line revizo/no-type-assertion
-      const pages = (yield* Model.get(AppView.model)) as unknown as Model.PortsOf<typeof AppView.model>;
+      // prop. Its `ui` stays opaque here; AppView is the matching binding
+      // that interprets it precisely.
+      const pages = yield* Model.get(AppView.model);
       // Forwarded whole into `ui.session` below, then into AppView's
       // `units` prop — SessionBadge/LoginForm read `session.ui.*` directly
       // (plain function components, not View.make's own binding), so they
