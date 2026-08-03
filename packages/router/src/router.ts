@@ -1908,8 +1908,7 @@ export const defaultStringifySearch = (searchRecord: SearchRecord): string => {
   return stringified === "" ? "" : `?${stringified}`;
 };
 
-const isSchemaCodec = (value: unknown): value is AnySchemaCodec =>
-  typeof value === "object" && value !== null && "ast" in value && !("decode" in value);
+const isSchemaCodec = (value: unknown): value is AnySchemaCodec => Schema.isSchema(value);
 
 const toRawSearch = (value: unknown): RawSearch => {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
