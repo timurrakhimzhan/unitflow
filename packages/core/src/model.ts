@@ -473,13 +473,15 @@ export type PortsFor<M extends AnyService, K> = [ShapesOf<M>] extends [never]
 
 /** Widens a resolved `ui` section to `UnitPorts`'s own opaque
  * `Record<string, unknown>` shape, leaving `inputs`/`outputs` (and any
- * extra section) precisely typed. `Model.get` is a composition primitive —
- * a caller reads another model's `outputs`, it does not reach into a
- * View-only surface it was never meant to render. The whole opaque bag is
- * still exactly `UnitPorts`-shaped, so forwarding it on into a PARENT's own
- * `ui` (`ui: { child }`, for a child View to bind) still compiles — nothing
- * is removed, `ui` just stops being individually readable outside `make`. A
- * model with no `ui` section at all (headless) passes through unchanged. */
+ * extra section) precisely typed.
+ *
+ * @deprecated Was `Model.get`'s return type in 0.8.0 only. An opaque `ui`
+ * made every `child.ui.x` read `unknown`, and a parent that re-exposes such
+ * a port in its own `ui` then fails `make`'s shape constraint — which
+ * collapses the model's inferred shape to the base `Shape` and rejects it
+ * from `View.make` altogether. `Model.get` returns {@link PortsFor} again,
+ * `ui` included; keeping composition on `outputs` is a convention, not a
+ * type. Kept only so 0.8.0 code naming this type keeps compiling. */
 export type ExternalPorts<P> = P extends { readonly ui: unknown }
   ? Omit<P, "ui"> & { readonly ui: Record<string, unknown> }
   : P;
@@ -712,21 +714,24 @@ export const Service =
  * and constructed once; when the last lease is released, the model's
  * `lifetime` policy decides how long it survives before disposal.
  *
- * `ui` comes back opaque (see {@link ExternalPorts}) — read `outputs` for a
- * data dependency; forward the whole result into a PARENT's own `ui` (`ui: {
- * child }`) unchanged when the intent is handing a child unit to a View.
- * `@unitflow/react`'s own binding resolves the same way internally but
- * keeps `ui` precise — this narrowing is for everyone else. */
+ * Every section comes back precisely typed, `ui` included (see {@link
+ * Ports}: stores read-only, events fire-only). By convention a model
+ * composes on another model's `outputs` and only forwards `ui` — whole
+ * (`ui: { child }`) or port by port — for a View to bind; tests play the
+ * View's role and read `ui` directly. That is a rule of use, not of type:
+ * an opaque `ui` (0.8.0) turned every such read into `unknown` and, worse,
+ * made any parent re-exposing a child's port fail `make`'s shape check and
+ * drop out of `View.make` entirely. */
 export const get = <M extends AnyService, const Args extends KeyArgs<KeyOf<M>>>(
   model: M,
   ...args: Args
-): Effect.Effect<ExternalPorts<PortsFor<M, Args[0]>>, ErrorOf<M>, Context.Service.Identifier<M>> =>
+): Effect.Effect<PortsFor<M, Args[0]>, ErrorOf<M>, Context.Service.Identifier<M>> =>
   // Narrowing the shape to capability ports is a type-level operation over
   // the same runtime value; TypeScript cannot reduce `Ports<A>` for an
   // unresolved generic `A`, hence the one boundary cast.
   // eslint-disable-next-line revizo/no-type-assertion
   Effect.flatMap(model, (accessor) => accessor.get(...args)) as Effect.Effect<
-    ExternalPorts<PortsFor<M, Args[0]>>,
+    PortsFor<M, Args[0]>,
     ErrorOf<M>,
     Context.Service.Identifier<M>
   >;

@@ -113,12 +113,9 @@ export const Unitflow = <M extends Model.Viewable>(props: UnitflowProps<M>): Rea
 );
 
 /** Every View renders a unit handed to it — by its parent View (from the
- * owning model's `ui`) or, for the root, by `Unitflow`. A `Model.get`
- * result keeps its `ui` opaque while it is being composed and forwarded;
- * the matching View binds that record against the model's precise `ui`
- * interface before invoking its render callback. */
+ * owning model's `ui`) or, for the root, by `Unitflow`. */
 export interface ViewProps<M extends Model.AnyService> {
-  readonly unit: Model.ExternalPorts<Model.PortsOf<M>>;
+  readonly unit: Model.PortsOf<M>;
 }
 
 /** A `ui` record bound for rendering: store outputs arrive as their current

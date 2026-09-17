@@ -186,10 +186,12 @@ const AppLayer = ProjectsPageModel.layer.pipe(
 The React runtime supplies the registry for the model graph. A headless Effect
 test provides `Registry.layer` explicitly.
 
-`Model.get` intentionally exposes another model's observation sections, not
-its individually-readable `ui`. The parent may pass the returned child unit
-through its own `ui`, but business composition should use the child's
-`outputs`.
+`Model.get` returns every section of the child precisely typed, `ui`
+included. By convention, business composition reads the child's `outputs`;
+`ui` is for forwarding to a View — the whole child unit (`ui: { child }`) or a
+single port re-exposed under the parent's own `ui` — and for tests that play
+the View's role. This is a rule of use, not a type: the ports themselves are
+already narrowed (stores read-only, events fire-only).
 
 Tests can replace either kind of dependency. Regular Effect services use fake
 layers; models can use `Model.layerValue(ChildModel, fakePorts)`.

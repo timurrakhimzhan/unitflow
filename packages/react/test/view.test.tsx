@@ -65,15 +65,18 @@ class CounterPanelModel extends Model.Service<CounterPanelModel>()(
     Effect.gen(function* () {
       const counter = yield* Model.get(CounterModel);
 
-      // Model composition reads precise outputs, not the View-only surface.
+      // Model composition reads outputs; ui stays precisely typed too, so a
+      // parent may re-expose a single child port in its own ui. Regression:
+      // an opaque ui (0.8.0) made `counter.ui.countStore` unknown, which
+      // failed this make's shape constraint and pushed CounterPanelModel out
+      // of View.make entirely ("Shape is not assignable to ViewableShape").
       const countStore: Store.Output<number> = counter.outputs.countStore;
-      // @ts-expect-error a Model.get result keeps the child's ui values opaque
-      void Store.get(counter.ui.countStore);
+      const childCount: Store.Output<number> = counter.ui.countStore;
 
       return {
         inputs: {},
         outputs: { countStore },
-        ui: { counter },
+        ui: { counter, childCount },
       };
     }),
 }) {}
@@ -132,13 +135,15 @@ describe("View.make", () => {
     assert.isDefined(byKey);
   });
 
-  it("forwards an opaque child unit to its matching View without a cast (type-level)", () => {
+  it("binds a parent that forwards a child unit and re-exposes a child port (type-level)", () => {
     const CounterView = View.make(CounterModel, () => null);
-    const CounterPanelView = View.make(CounterPanelModel, ({ counter }) => {
-      const countStore: Store.Output<number> = counter.outputs.countStore;
+    const CounterPanelView = View.make(CounterPanelModel, ({ counter, childCount }) => {
+      // A forwarded child unit passes through unbound, fully typed …
+      const countStore: Store.Output<number> = counter.ui.countStore;
       void countStore;
-      // @ts-expect-error the parent View cannot use the child's opaque ui values
-      void Store.get(counter.ui.countStore);
+      // … while a re-exposed child store arrives bound to its value.
+      const bound: number = childCount;
+      void bound;
 
       return <CounterView unit={counter} />;
     });

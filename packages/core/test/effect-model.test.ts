@@ -913,10 +913,8 @@ describe("Unitflow", () => {
       const registry = yield* Registry;
       // FormModel's nameStore/onNameChange are ui-only by design (a setter
       // event has no business being a composition target for other
-      // models) — this test plays the View's role, so it reads `ui` the
-      // same way `@unitflow/react`'s binding does internally.
-      // eslint-disable-next-line revizo/no-type-assertion
-      const form = (yield* Model.get(FormModel)) as unknown as Model.PortsOf<typeof FormModel>;
+      // models) — this test plays the View's role and reads `ui` directly.
+      const form = yield* Model.get(FormModel);
 
       const valuesFiber = yield* Store.stream(form.ui.nameStore).pipe(
         Stream.filter((name) => name === "Ada"),

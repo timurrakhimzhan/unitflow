@@ -106,11 +106,8 @@ export class AppModel extends Model.Service<AppModel>()(
       // that interprets it precisely.
       const pages = yield* Model.get(AppView.model);
       // Forwarded whole into `ui.session` below, then into AppView's
-      // `units` prop — SessionBadge/LoginForm read `session.ui.*` directly
-      // (plain function components, not View.make's own binding), so they
-      // need the same full precision.
-      // eslint-disable-next-line revizo/no-type-assertion
-      const session = (yield* Model.get(SessionModel)) as unknown as Model.PortsOf<typeof SessionModel>;
+      // `units` prop — SessionBadge/LoginForm read `session.ui.*` directly.
+      const session = yield* Model.get(SessionModel);
       return {
         inputs: {},
         outputs: {},
