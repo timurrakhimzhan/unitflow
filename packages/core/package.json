@@ -62,11 +62,11 @@
     "test": "tsc -p tsconfig.test.json && vitest run"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.102"
+    "effect": ">=4.0.0-rc.115 <5.0.0"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0-beta.102",
-    "effect": "4.0.0-beta.102",
-    "vitest": "3.2.4"
+    "@effect/vitest": "4.0.0-rc.115",
+    "effect": "4.0.0-rc.115",
+    "vitest": "5.0.1"
   }
 }

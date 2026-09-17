@@ -14,7 +14,7 @@ around Effect services, layers, scopes, and dependency injection.
 ## Install
 
 ```sh
-pnpm add @unitflow/core effect@4.0.0-beta.88
+pnpm add @unitflow/core effect@4.0.0-rc.115
 ```
 
 ## Imports

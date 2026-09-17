@@ -13,7 +13,7 @@ around Effect services, layers, scopes, and dependency injection.
 ## Install
 
 ```sh
-pnpm add @unitflow/react @unitflow/core effect@4.0.0-beta.88 react
+pnpm add @unitflow/react @unitflow/core effect@4.0.0-rc.115 react
 ```
 
 ## Imports

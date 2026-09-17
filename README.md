@@ -18,13 +18,13 @@ around Effect services, layers, scopes, and dependency injection.
 For React apps:
 
 ```sh
-pnpm add @unitflow/react @unitflow/core effect@4.0.0-beta.88 react
+pnpm add @unitflow/react @unitflow/core effect@4.0.0-rc.115 react
 ```
 
 For non-React runtimes:
 
 ```sh
-pnpm add @unitflow/core effect@4.0.0-beta.88
+pnpm add @unitflow/core effect@4.0.0-rc.115
 ```
 
 ## Core Ideas

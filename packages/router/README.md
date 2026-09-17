@@ -7,7 +7,7 @@ stay in models and layers. React meets the router in exactly one place.
 ## Install
 
 ```sh
-pnpm add @unitflow/router @unitflow/react @unitflow/core effect@4.0.0-beta.88
+pnpm add @unitflow/router @unitflow/react @unitflow/core effect@4.0.0-rc.115
 ```
 
 ## `Router.make`: building the router
