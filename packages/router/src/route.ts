@@ -29,6 +29,8 @@ export {
   type PrefixedRoute,
   type WithMiddleware,
   type MembersOf,
+  type BaseOf,
+  type WithChildren,
   addChild,
   route as make,
   add,

@@ -371,19 +371,43 @@ export type PrefixedTuple<T extends ReadonlyArray<Route.Any>, Prefix extends str
   readonly [K in keyof T]: PrefixedRoute<T[K], Prefix>;
 };
 
-// `Omit<R, "~children">` first: R may already carry a marker from an
-// earlier `.pipe(Route.addChild(...))` in the same chain — intersecting a
-// SECOND "~children" property on top of that (rather than replacing it)
-// would type it as `OldTuple & NewTuple`, not the union `Descendants` needs.
-// `Child` (and its own already-attached descendants) get `Route.Path<R>`
-// joined in, matching the runtime path-joining `flattenRoute` performs.
-export type WithChild<R extends Route.Any, Child extends Route.Any> = Omit<R, "~children"> & {
-  readonly "~children": readonly [
+/** The plain `Route<…>` underneath a route that carries a children marker.
+ *
+ * A route with `addChild` children is typed as its plain route INTERSECTED
+ * with a phantom marker. TypeScript does not reliably infer `Route<infer …>`
+ * back out of such an intersection (nor out of an `Omit<…>` copy, which is
+ * what this used to use) — and every operation here (`WithChild`,
+ * `WithMiddleware`, `PrefixedRoute`) rebuilds a route from exactly that
+ * inference. So the marker keeps the plain route itself as `"~base"`, and
+ * the operations read it from there instead of inferring it: a route that had
+ * children no longer falls to `never` in the next operation and vanishes from
+ * the table's ids. A route with no marker is its own base. */
+export type BaseOf<R> = R extends { readonly "~base": infer B extends Route.Any } ? B : R;
+
+/** A plain route carrying the given (already flattened) descendants. */
+export type WithChildren<Base, Children> = Base & {
+  readonly "~base": Base;
+  readonly "~children": Children;
+};
+
+/** `NewBase`, carrying over whatever children `R` had. */
+type KeepChildren<R, NewBase> = R extends { readonly "~children": infer C }
+  ? WithChildren<NewBase, C>
+  : NewBase;
+
+// Rebuilt from the plain base, so a SECOND `.pipe(Route.addChild(...))`
+// REPLACES the marker (extended) instead of intersecting a new one with it
+// (which would type it as `OldTuple & NewTuple`). `Child` (and its own
+// already-attached descendants) get `Route.Path<R>` joined in, matching the
+// runtime path-joining `flattenRoute` performs.
+export type WithChild<R extends Route.Any, Child extends Route.Any> = WithChildren<
+  BaseOf<R>,
+  readonly [
     ...Route.Children<R>,
     PrefixedRoute<Child, Route.Path<R>>,
     ...PrefixedTuple<Route.Children<Child>, Route.Path<R>>,
-  ];
-};
+  ]
+>;
 
 /** Declares `child` as nested under `self`: `child`'s path is rewritten to
  * join under `self`'s own path (reuses the same `joinPaths` composition
@@ -410,7 +434,7 @@ export const addChild =
     } as unknown as WithChild<Self, Child>;
   };
 
-export type PrefixedRoute<R extends Route.Any, Prefix extends string> = R extends Route<
+export type PrefixedRoute<R extends Route.Any, Prefix extends string> = BaseOf<R> extends Route<
   infer Id,
   infer Path,
   infer ParamsSchema,
@@ -434,21 +458,31 @@ const prefixRoute = <R extends Route.Any, const Prefix extends string>(
   } as unknown as PrefixedRoute<R, Prefix>;
 };
 
-export type WithMiddleware<R extends Route.Any, M extends AnyMiddleware> = R extends Route<
-  infer Id,
-  infer Path,
-  infer ParamsSchema,
-  infer Search,
-  infer Requires,
-  infer Provided
->
-  ? Route<
-      Id,
-      Path,
-      ParamsSchema,
-      Search,
-      Requires | Context.Service.Identifier<M>,
-      [ProvidesOf<M>] extends [void] ? Provided : Provided & ProvidesOf<M>
+/** A route with a middleware attached: what it requires gains the
+ * middleware's tag, what it provides gains its output — and a route that has
+ * `addChild` children keeps them. (It used to lose itself instead: guarding a
+ * group dropped every route with children from the table's ids.)
+ * Distributes over a union of routes. */
+export type WithMiddleware<R extends Route.Any, M extends AnyMiddleware> = R extends Route.Any
+  ? KeepChildren<
+      R,
+      BaseOf<R> extends Route<
+        infer Id,
+        infer Path,
+        infer ParamsSchema,
+        infer Search,
+        infer Requires,
+        infer Provided
+      >
+        ? Route<
+            Id,
+            Path,
+            ParamsSchema,
+            Search,
+            Requires | Context.Service.Identifier<M>,
+            [ProvidesOf<M>] extends [void] ? Provided : Provided & ProvidesOf<M>
+          >
+        : never
     >
   : never;
 
@@ -574,7 +608,14 @@ export const layout =
       // eslint-disable-next-line revizo/no-type-assertion
       "~types": undefined as never,
     };
-    const linkedMembers = members.map((member) => ({ ...member, parentId: id }));
+    // Only the group's TOP-LEVEL members hang under the layout. A member an
+    // `addChild` already placed under another route keeps that parent: a
+    // shell around a project must not turn the project's screens into its
+    // siblings. (`group` has flattened children into `members`, each carrying
+    // its own `parentId` — which is how the two are told apart.)
+    const linkedMembers = members.map((member) =>
+      member.parentId === undefined ? { ...member, parentId: id } : member,
+    );
     // eslint-disable-next-line revizo/no-type-assertion
     return group(parent, ...linkedMembers) as never;
   };

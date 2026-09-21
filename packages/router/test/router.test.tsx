@@ -662,6 +662,69 @@ describe("@unitflow/router", () => {
       }).pipe(Effect.provide(model.layer.pipe(Layer.provideMerge(testEnv()))));
     });
 
+    // `Route.layout` wraps its members under a pathless parent. It used to set
+    // that parent on EVERY route in the group — including the children an
+    // `addChild` had already given a parent — so a project's screens stopped
+    // being its children the moment the app put a shell around them.
+    it.effect("a layout keeps the hierarchy addChild declared inside it", () => {
+      const Scene = Route.make("scene", { path: "/scene" });
+      const Plan = Route.make("plan", { path: "/plan" });
+      const Project = Route.make("project", {
+        path: "/projects/:id",
+        params: Schema.Struct({ id: Schema.String }),
+      }).pipe(Route.addChild(Scene), Route.addChild(Plan));
+      const { model, routeModel } = Router.make(
+        `/test/router/layout-keeps-children/${++nextRouter}`,
+        Route.group(Project).pipe(Route.layout("shell")),
+      );
+      return Effect.gen(function* () {
+        const router = yield* Model.get(model);
+        yield* Registry.allSettled(Event.emit(router.inputs.navigate, { to: "/projects/7/plan" }));
+        const state = yield* Store.get(router.outputs.state);
+        assert.deepStrictEqual(
+          state.matches.map((match) => match.route.id),
+          ["shell", "project", "plan"],
+        );
+        // The whole point: the parent is open while a child is, with its params.
+        const project = yield* Model.get(routeModel, "project");
+        assert.isTrue(yield* Store.get(project.outputs.opened));
+        assert.deepStrictEqual(yield* Store.get(project.outputs.params), Option.some({ id: "7" }));
+      }).pipe(
+        Effect.provide(routeModel.layer.pipe(Layer.provideMerge(model.layer), Layer.provideMerge(testEnv()))),
+      );
+    });
+
+    // A guard on a group reaches every route in it. The TYPE of a guarded route
+    // was rebuilt from `Route<…>`'s own parameters, which a route carrying
+    // `addChild` children no longer matches — so it fell out of the table's
+    // ids altogether, and `routeModel` would not accept it as a key.
+    it("guarding a group keeps a route that has children, and its children, in the table", () => {
+      class TreeGuard extends Router.Middleware<TreeGuard>()("/test/router/TreeGuard")<{
+        readonly user: string;
+      }>() {}
+      const Project = Route.make("project", {
+        path: "/projects/:id",
+        params: Schema.Struct({ id: Schema.String }),
+      }).pipe(Route.addChild(Route.make("plan", { path: "/plan" })));
+      const Plain = Route.make("plain", { path: "/plain" });
+      const guarded = Route.group(Project, Plain).middleware(TreeGuard);
+      type RoutesOf<G> = G extends { readonly routes: ReadonlyArray<infer R> } ? R : never;
+      type Ids = Router.RouteIds<typeof guarded>;
+      const ids: ReadonlyArray<Ids> = ["project", "plan", "plain"];
+      assert.deepStrictEqual(
+        guarded.routes.map((route) => route.id),
+        ids,
+      );
+      // What the guard provides reaches the guarded parent's type as well.
+      type ProjectOutput = Route.Output<
+        Extract<RoutesOf<typeof guarded>, { readonly id: "project" }>
+      >;
+      const provided: ProjectOutput = { user: "u" };
+      assert.strictEqual(provided.user, "u");
+      // …and runtime agrees: every route of the group carries the guard.
+      assert.isTrue(guarded.routes.every((route) => route.middlewares.includes(TreeGuard)));
+    });
+
     it.effect("navigate accepts a raw href string and still runs guards", () => {
       class RawGuard extends Router.Middleware<RawGuard>()("/test/router/RawGuard")<{
         readonly ok: true;
