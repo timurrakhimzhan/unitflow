@@ -3,6 +3,7 @@ import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import { type Pipeable, pipeArguments } from "effect/Pipeable";
@@ -17,6 +18,7 @@ import {
   ownerScope,
   Registry,
   type RegistryService,
+  completeCounted,
   releaseSubscription,
   requiredOwnerScope,
   type SubscriptionTracker,
@@ -569,81 +571,136 @@ const flattenStream = (store: Flatten<any>): Stream.Stream<any, never, Registry>
     }),
   );
 
-const storeStream = <A>(store: Output<A>): Stream.Stream<A, never, Registry> =>
+/**
+ * The pull stream every non-flattened source is read through: it attaches a
+ * synchronous listener to each plain source the moment the pipeline is
+ * forked — nothing written afterwards slips past the subscription — and seeds
+ * the first pull with the current value.
+ *
+ * A combined source listens on all of its plain sources and re-reads itself
+ * on each of their writes; `dedupe` then keeps a recomputation equal to the
+ * last emission from counting as one. Every source carries its own
+ * subscription tracker, so a write to any of them stays pending in
+ * `Registry.allSettled` exactly until this pipeline has handled what it
+ * produced — and a write that produced nothing settles on the spot.
+ */
+const listenerStream = <A>(
+  store: Output<A>,
+  sources: ReadonlyArray<Output<any>>,
+  dedupe: boolean,
+): Stream.Stream<A, never, Registry> =>
   Stream.unwrap(
     Effect.gen(function* () {
       const registry = yield* Registry;
-      const subscriptionRef = yield* refFromRegistry(registry, store);
+      // Every backing ref first: the listeners read through the synchronous
+      // evaluator, which resolves only against materialized refs.
+      yield* Effect.forEach(sources, (source) => refFromRegistry(registry, source), {
+        discard: true,
+      });
       const scope = yield* Effect.scope;
-      const tracker = trackSubscription(registry, store.id, 1);
-      let queue: Array<A> = [SubscriptionRef.getUnsafe(subscriptionRef)];
+      const needsMemo = isCombined(store);
+      // eslint-disable-next-line revizo/no-type-assertion
+      const read = (): A => evalSync(registry, store, needsMemo ? new Map() : undefined) as A;
+
+      // The replayed current value is one uncounted item: it was never
+      // published, so it must not pay for a publish.
+      const trackers = sources.map((source, index) =>
+        trackSubscription(registry, source.id, index === 0 ? 1 : 0),
+      );
+      const [firstTracker] = trackers;
+      if (firstTracker === undefined) return Stream.make(read());
+
+      let current = read();
+      let queue: Array<{ readonly value: A; readonly tracker: SubscriptionTracker }> = [
+        { value: current, tracker: firstTracker },
+      ];
       let waiter: Deferred.Deferred<void> | undefined;
       let closed = false;
-      const listener: StoreStreamListener<A> = {
-        offer(value) {
-          if (closed) return;
-          queue.push(value);
-          if (waiter !== undefined) {
-            const deferred = waiter;
-            waiter = undefined;
-            Deferred.doneUnsafe(deferred, Effect.void);
-          }
-        },
-        close() {
-          if (closed) return;
-          closed = true;
-          queue = [];
-          if (waiter !== undefined) {
-            const deferred = waiter;
-            waiter = undefined;
-            Deferred.doneUnsafe(deferred, Effect.void);
-          }
-        },
+      const wake = (): void => {
+        if (waiter === undefined) return;
+        const deferred = waiter;
+        waiter = undefined;
+        Deferred.doneUnsafe(deferred, Effect.void);
       };
 
       const listenersByStore = listenersFor(registry);
-      const listeners = listenersByStore.get(store.id);
-      if (listeners === undefined) {
-        listenersByStore.set(store.id, new Set([listener]));
-      } else {
-        listeners.add(listener);
-      }
+      const attached: Array<{
+        readonly id: string;
+        readonly listener: StoreStreamListener<unknown>;
+      }> = [];
+      sources.forEach((source, index) => {
+        const tracker = trackers[index] ?? firstTracker;
+        const listener: StoreStreamListener<unknown> = {
+          offer() {
+            if (closed) return;
+            const value = read();
+            if (value === Unresolved) return;
+            if (dedupe && Equal.equals(value, current)) {
+              // Counted by the publish and delivered to nobody: settle it
+              // here, or `allSettled` waits for an emission never coming.
+              completeCounted(registry, tracker);
+              return;
+            }
+            current = value;
+            queue.push({ value, tracker });
+            wake();
+          },
+          close() {
+            if (closed) return;
+            closed = true;
+            queue = [];
+            wake();
+          },
+        };
+        const listeners = listenersByStore.get(source.id);
+        if (listeners === undefined) {
+          listenersByStore.set(source.id, new Set([listener]));
+        } else {
+          listeners.add(listener);
+        }
+        attached.push({ id: source.id, listener });
+      });
 
       yield* Scope.addFinalizer(
         scope,
         Effect.sync(() => {
           closed = true;
-          const listenersByStore = storeStreamListeners.get(registry);
-          const listeners = listenersByStore?.get(store.id);
-          if (listeners !== undefined) {
+          const byStore = storeStreamListeners.get(registry);
+          for (const { id, listener } of attached) {
+            const listeners = byStore?.get(id);
+            if (listeners === undefined) continue;
             listeners.delete(listener);
-            if (listeners.size === 0) listenersByStore?.delete(store.id);
+            if (listeners.size === 0) byStore?.delete(id);
           }
-          releaseSubscription(registry, store.id, tracker);
+          for (const [index, tracker] of trackers.entries()) {
+            const source = sources[index];
+            if (source !== undefined) releaseSubscription(registry, source.id, tracker);
+          }
         }),
       );
 
+      const takeQueued = (): readonly [A, ...Array<A>] | undefined => {
+        if (queue.length === 0) return undefined;
+        const items = queue;
+        queue = [];
+        for (const tracker of trackers) tracker.outstanding = 0;
+        for (const item of items) item.tracker.outstanding += 1;
+        // Non-empty by the check above.
+        // eslint-disable-next-line revizo/no-type-assertion
+        return items.map((item) => item.value) as unknown as readonly [A, ...Array<A>];
+      };
+
       const pull = Effect.suspend(() => {
-        completeStoreOutstanding(registry, tracker);
-        if (queue.length > 0) {
-          const items = queue;
-          queue = [];
-          tracker.outstanding = items.length;
-          // eslint-disable-next-line revizo/no-type-assertion
-          return Effect.succeed(items as unknown as readonly [A, ...Array<A>]);
-        }
+        for (const tracker of trackers) completeStoreOutstanding(registry, tracker);
+        const ready = takeQueued();
+        if (ready !== undefined) return Effect.succeed(ready);
         if (closed) return Cause.done();
         const deferred = Deferred.makeUnsafe<void>();
         waiter = deferred;
         return Deferred.await(deferred).pipe(
           Effect.flatMap(() => {
-            if (closed && queue.length === 0) return Cause.done();
-            if (queue.length === 0) return Cause.done();
-            const items = queue;
-            queue = [];
-            tracker.outstanding = items.length;
-            // eslint-disable-next-line revizo/no-type-assertion
-            return Effect.succeed(items as unknown as readonly [A, ...Array<A>]);
+            const items = takeQueued();
+            return items === undefined ? Cause.done() : Effect.succeed(items);
           }),
           Effect.onInterrupt(() => {
             if (waiter === deferred) waiter = undefined;
@@ -661,20 +718,15 @@ export const stream = <A>(store: Output<A>): Stream.Stream<A, never, Registry> =
   if (isCombined(store)) {
     const sources = uniqueSources(watchSources(store));
     if (sources.length === 0) return Stream.make(store.initial);
-    // One deduped watch source needs no zip layer: `zipLatestAll` over a
-    // single stream emits exactly once per source emission anyway, so recombine
-    // directly and skip its coordination fiber.
-    const [only] = sources;
-    const emissions =
-      sources.length === 1 && only !== undefined
-        ? stream(only)
-        : Stream.zipLatestAll(...sources.map(stream));
-    return emissions.pipe(
-      Stream.mapEffect(() => get(store)),
-      Stream.changes,
-    );
+    // Listened to directly, on every plain source it is built from. The
+    // `zipLatestAll` layer this used to go through subscribed a scheduler hop
+    // late and was invisible to `Registry.allSettled`: a pipeline forked in a
+    // model's `make` missed every write until its own subscription landed —
+    // including, for a store written during construction, the current value
+    // it was forked to receive.
+    return listenerStream(store, sources, true);
   }
-  return storeStream(store);
+  return listenerStream(store, [store], false);
 };
 
 type ForwardInput<A> = Output<A> | Effect.Effect<Output<A>, any, any>;
