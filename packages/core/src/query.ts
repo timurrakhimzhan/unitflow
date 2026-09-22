@@ -1,5 +1,6 @@
-import * as Deferred from "effect/Deferred";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import type * as Schedule from "effect/Schedule";
@@ -25,6 +26,15 @@ export interface Query<
   /** The full store: the owning model may override it manually
    * (`Store.set(query.state, ...)`). */
   readonly state: Store.Store<AsyncResult.AsyncResult<A, E>>;
+  /** The last value the handler returned, `None` until the first success.
+   *
+   * It answers "what did we last load", not "what is loaded now": it survives
+   * a dependency change (so a screen may keep the previous list on-screen
+   * while the next one loads) and a failed reload, and it does not say which
+   * dependency values produced it. Read {@link state} instead whenever
+   * showing data from the previous dependencies would be wrong — there,
+   * `!waiting` means the value answers the current dependencies. */
+  readonly data: Store.Output<Option.Option<A>>;
   /** Emitting reloads. Safe to expose as a `ui` port directly; as an
    * `inputs` port, go through `Event.toInput(query.refresh)` — the query's
    * own construction (and the owning model, freely) still emits this exact
@@ -85,30 +95,80 @@ export interface InfiniteOptions<
 }
 
 /**
- * Runs one fetch into an `AsyncResult` store: marks it waiting (keeping the
- * previous value on screen), then records success or failure (a failure keeps
- * the previous success, so a flaky refetch never blanks loaded data). The
- * returned effect never fails: failures are state.
+ * The bookkeeping every loader of one query shares: which answer is still
+ * wanted, and which fiber is producing it.
+ *
+ * A query has exactly one answer in flight. Whatever supersedes it — a
+ * dependency change, and for a paginated query a restart — ends its
+ * generation: the fiber is cancelled and anything it would still write is
+ * dropped. Without that, the answer that finished last won, rather than the
+ * one released last.
+ */
+interface Generations<A, E> {
+  readonly state: Store.Store<AsyncResult.AsyncResult<A, E>>;
+  readonly data: Store.Store<Option.Option<A>>;
+  /** Ends the current generation and returns the new one. */
+  readonly supersedeUnsafe: () => number;
+  /** The generation a write must still belong to for it to land. */
+  readonly current: () => number;
+  /** Adopts `fiber` as the answer in flight of the current generation. */
+  readonly hold: (fiber: Fiber.Fiber<unknown, unknown>) => void;
+  readonly release: (fiber: Fiber.Fiber<unknown, unknown>) => void;
+}
+
+/**
+ * Runs one fetch into a query's stores: marks the state waiting (keeping the
+ * previous value on screen for a reload of the same dependencies), then
+ * records success or failure. A failure keeps the previous success, so a
+ * flaky refetch never blanks loaded data, and `data` is left alone entirely —
+ * it holds what the endpoint last returned, not what the last attempt did.
+ *
+ * Writes land only while this run is still the wanted one; a superseded run
+ * finishes silently. The returned effect never fails: failures are state.
  */
 const load = <A, E, R>(
-  store: Store.Store<AsyncResult.AsyncResult<A, E>>,
+  generations: Generations<A, E>,
   request: Effect.Effect<A, E, R>,
 ): Effect.Effect<void, never, R | Registry> =>
   Effect.gen(function* () {
+    const generation = generations.supersedeUnsafe();
+    const wanted = () => generations.current() === generation;
     // Start the request before publishing waiting so an observer woken by the
     // waiting emission finds the request already in flight.
     const fiber = yield* Effect.forkChild(request, { startImmediately: true });
-    yield* Store.update(store, (current) => AsyncResult.waiting(current));
+    generations.hold(fiber);
+    if (wanted()) {
+      yield* Store.update(generations.state, (current) => AsyncResult.waiting(current));
+    }
     yield* Fiber.join(fiber).pipe(
       Effect.matchCauseEffect({
-        onSuccess: (value) => Store.set(store, AsyncResult.success(value)),
+        onSuccess: (value) =>
+          wanted()
+            ? Effect.andThen(
+                Store.set(generations.state, AsyncResult.success(value)),
+                Store.set(generations.data, Option.some(value)),
+              )
+            : Effect.void,
         onFailure: (cause) =>
-          Store.update(store, (current) =>
-            AsyncResult.failureWithPrevious(cause, { previous: Option.some(current) }),
-          ),
+          // A superseded run is cancelled, so its interruption is bookkeeping,
+          // not an error the query should show.
+          wanted() && !Cause.hasInterruptsOnly(cause)
+            ? Store.update(generations.state, (current) =>
+                AsyncResult.failureWithPrevious(cause, { previous: Option.some(current) }),
+              )
+            : Effect.void,
       }),
     );
+    generations.release(fiber);
   });
+
+/** The writable side of every query's `data`, which the public interface
+ * exposes read-only. `persist` needs it to seed a restored value; nothing
+ * outside this module can reach it. */
+const dataStores = new WeakMap<
+  Query<any, any, any>,
+  Store.Store<Option.Option<any>>
+>();
 
 /** Reads the current value of every dependency store, keyed as declared. */
 const depValues = <Deps extends Record<string, Store.Output<any>>>(
@@ -122,39 +182,93 @@ const depValues = <Deps extends Record<string, Store.Output<any>>>(
     return out as DepValues<Deps>;
   });
 
+/** The query plus the bookkeeping `makeInfinite` extends: page loads join the
+ * same generations, and a dependency change resets the cursor in the same
+ * dispatch that resets the state. */
+interface Base<A, E, Deps extends Record<string, Store.Output<any>>> {
+  readonly query: Query<A, E, Deps>;
+  readonly generations: Generations<A, E>;
+}
+
+interface BaseOptions {
+  /** Runs inside the dispatch of the dependency write, right before the state
+   * is reset: whatever else must not survive the old dependencies. */
+  readonly onDependencyChangeUnsafe?: () => void;
+}
+
 /** Builds the shared query skeleton: an `AsyncResult` store fed by `request`,
  * reloaded on `refresh` and on every dependency change. */
 const base = <Deps extends Record<string, Store.Output<any>>, A, E, R>(
   stores: Deps,
   request: (deps: DepValues<Deps>) => Effect.Effect<A, E, R>,
-): Effect.Effect<Query<A, E, Deps>, never, R | Registry | InstanceScope> =>
+  options?: BaseOptions,
+): Effect.Effect<Base<A, E, Deps>, never, R | Registry | InstanceScope> =>
   Effect.gen(function* () {
+    const registry = yield* Registry;
     const state = Store.make<AsyncResult.AsyncResult<A, E>>(AsyncResult.initial(true));
+    const data = Store.make<Option.Option<A>>(Option.none());
+    // Materialized up front: the dependency listener below writes the state
+    // without leaving the dispatch, and a synchronous write needs the ref.
+    yield* Store.ref(state);
+
+    let generation = 0;
+    let inFlight: Fiber.Fiber<unknown, unknown> | undefined;
+    const generations: Generations<A, E> = {
+      state,
+      data,
+      supersedeUnsafe: () => {
+        generation += 1;
+        const superseded = inFlight;
+        inFlight = undefined;
+        superseded?.interruptUnsafe();
+        return generation;
+      },
+      current: () => generation,
+      hold: (fiber) => {
+        inFlight = fiber;
+      },
+      release: (fiber) => {
+        if (inFlight === fiber) inFlight = undefined;
+      },
+    };
 
     // The handler always receives fresh dependency values, read right before
     // each run.
-    const run = Effect.flatMap(depValues(stores), (deps) => load(state, request(deps)));
+    const run = Effect.flatMap(depValues(stores), (deps) =>
+      load(generations, request(deps)),
+    );
 
     const refresh = yield* Event.make().pipe(Event.handler(() => run));
-    const readySignals: Array<Deferred.Deferred<void>> = [];
+    const refreshChannel = yield* Event.pubsub(refresh);
+
     for (const source of Object.values(stores)) {
-      const ready = yield* Deferred.make<void>();
-      readySignals.push(ready);
-      yield* Registry.run(
-        Store.stream(source).pipe(
-          Stream.tap(() => Deferred.succeed(ready, undefined)),
-          Stream.drop(1),
-          Stream.mapEffect(() => run),
-        ),
-      );
+      // Structural equality, matching the `Stream.changes` a `Store.stream`
+      // subscription applied before: a recomputed dependency that is equal to
+      // the old one (a combined store rebuilding `Option.some({ id })` from
+      // an unrelated write) is not a change and must not refetch.
+      yield* Store.onChangeUnsafe(source, () => {
+        // In the dispatch of the dependency write itself: no observer, not
+        // even a synchronous one, can read the answer to the old dependencies
+        // under the new ones. The value is gone rather than merely flagged
+        // stale, so `!waiting` means "answers the current dependencies".
+        // What the endpoint last returned stays in `data` for whoever wants
+        // to keep it on screen.
+        generations.supersedeUnsafe();
+        options?.onDependencyChangeUnsafe?.();
+        Store.setUnsafeNow(registry, state, AsyncResult.initial(true));
+        // Dispatched, not emitted: the reload has to be counted against
+        // `Registry.allSettled` from inside this same step.
+        Event.dispatchUnsafe(registry, refreshChannel, refresh, undefined);
+      }, { equals: Equal.equals });
     }
-    yield* Effect.forEach(readySignals, Deferred.await, { discard: true });
 
     // The initial load goes through the refresh channel so `Registry.allSettled`
     // covers construction-time loads.
     yield* Event.emit(refresh);
 
-    return { state, refresh, stores };
+    const query: Query<A, E, Deps> = { state, data, refresh, stores };
+    dataStores.set(query, data);
+    return { query, generations };
   });
 
 /**
@@ -173,16 +287,27 @@ export const makeInfinite = <
   options: InfiniteOptions<Deps, Item, Cursor, E, R>,
 ): Effect.Effect<Paginated<Item, E, Deps>, never, R | Registry | InstanceScope> =>
   Effect.gen(function* () {
+    const registry = yield* Registry;
     const stores = (options.stores ?? {}) as Deps;
     // `None` means exhausted or nothing loaded yet. Updated only on
     // successful loads, so a failed page leaves `loadMore` retryable.
     const cursor = Store.make<Option.Option<Cursor>>(Option.none());
+    yield* Store.ref(cursor);
 
-    const query = yield* base<Deps, ReadonlyArray<Item>, E, R | Registry>(stores, (deps) =>
-      options.handler(deps, options.initialCursor).pipe(
-        Effect.tap((page) => Store.set(cursor, page.next)),
-        Effect.map((page) => page.data),
-      ),
+    const { query, generations } = yield* base<Deps, ReadonlyArray<Item>, E, R | Registry>(
+      stores,
+      (deps) =>
+        options.handler(deps, options.initialCursor).pipe(
+          Effect.tap((page) => Store.set(cursor, page.next)),
+          Effect.map((page) => page.data),
+        ),
+      {
+        // A cursor belongs to the dependencies that produced it: continuing
+        // from it under new ones would append a stranger's page.
+        onDependencyChangeUnsafe: () => {
+          Store.setUnsafeNow(registry, cursor, Option.none());
+        },
+      },
     );
 
     const hasMore = Store.combine([cursor], Option.isSome);
@@ -192,37 +317,56 @@ export const makeInfinite = <
         Effect.gen(function* () {
           const current = yield* Store.get(query.state);
           if (current.waiting) return;
-          const loaded = AsyncResult.value(current);
-          if (Option.isNone(loaded)) return;
+          if (Option.isNone(AsyncResult.value(current))) return;
           const next = yield* Store.get(cursor);
           if (Option.isNone(next)) return;
           const deps = yield* depValues(stores);
+          // A page extends the answer the current generation is building: it
+          // joins that generation rather than starting one, but it is still
+          // the query's one fetch in flight, so a dependency change cancels it.
+          const generation = generations.current();
+          const wanted = () => generations.current() === generation;
           yield* Store.update(query.state, (state) => AsyncResult.waiting(state));
-          yield* Effect.forkChild(
+          const fiber = yield* Effect.forkChild(
             options.handler(deps, next.value).pipe(
               Effect.matchCauseEffect({
                 onSuccess: (page) =>
-                  Store.set(cursor, page.next).pipe(
-                    Effect.flatMap(() =>
-                      Store.set(
-                        query.state,
-                        AsyncResult.success([...loaded.value, ...page.data]),
-                      ),
-                    ),
-                  ),
+                  wanted()
+                    ? Effect.gen(function* () {
+                        yield* Store.set(cursor, page.next);
+                        // Appended to what the store holds now, not to the
+                        // list captured when this page was requested.
+                        const items = yield* Store.modify(query.state, (state) => {
+                          const appended = [
+                            ...Option.getOrElse(
+                              AsyncResult.value(state),
+                              (): ReadonlyArray<Item> => [],
+                            ),
+                            ...page.data,
+                          ];
+                          return [appended, AsyncResult.success(appended)];
+                        });
+                        yield* Store.set(generations.data, Option.some(items));
+                      })
+                    : Effect.void,
                 onFailure: (cause) =>
-                  Store.update(query.state, (state) =>
-                    AsyncResult.failureWithPrevious(cause, { previous: Option.some(state) }),
-                  ),
+                  wanted() && !Cause.hasInterruptsOnly(cause)
+                    ? Store.update(query.state, (state) =>
+                        AsyncResult.failureWithPrevious(cause, { previous: Option.some(state) }),
+                      )
+                    : Effect.void,
               }),
             ),
             { startImmediately: true },
           );
+          generations.hold(fiber);
         }),
       ),
     );
 
-    return { ...query, loadMore, hasMore };
+    const paginated: Paginated<Item, E, Deps> = { ...query, loadMore, hasMore };
+    dataStores.set(paginated, generations.data);
+    return paginated;
   });
 
 export function make<A, E, R>(
@@ -236,9 +380,12 @@ export function make(
     | Effect.Effect<any, any, any>
     | MakeOptions<Record<string, Store.Output<any>>, any, any, any>,
 ): Effect.Effect<any, never, any> {
-  return Effect.isEffect(requestOrOptions)
-    ? base({}, () => requestOrOptions)
-    : base(requestOrOptions.stores ?? {}, requestOrOptions.handler);
+  return Effect.map(
+    Effect.isEffect(requestOrOptions)
+      ? base({}, () => requestOrOptions)
+      : base(requestOrOptions.stores ?? {}, requestOrOptions.handler),
+    ({ query }) => query,
+  );
 }
 
 /** Forks one pipeline per source that reloads the query whenever that
@@ -279,16 +426,26 @@ export const persist =
 
         // Seed only while the initial load has not settled, and keep the
         // waiting flag: the load fired at construction is still in flight.
+        // The stored copy is the last answer we know of, so it seeds `data`
+        // as well — a view that reads `data` to tolerate staleness is exactly
+        // the one that should see a restored value.
+        const data = dataStores.get(query);
         const seed = Effect.flatMap(
           slot.load,
           Option.match({
             onNone: () => Effect.void,
             onSome: (value) =>
-              Store.update(query.state, (current) =>
-                AsyncResult.isInitial(current)
-                  ? AsyncResult.waiting(AsyncResult.success(value))
-                  : current,
-              ),
+              Effect.gen(function* () {
+                yield* Store.update(query.state, (current) =>
+                  AsyncResult.isInitial(current)
+                    ? AsyncResult.waiting(AsyncResult.success(value))
+                    : current,
+                );
+                if (data === undefined) return;
+                yield* Store.update(data, (current) =>
+                  Option.isNone(current) ? Option.some(value) : current,
+                );
+              }),
           }),
         );
 

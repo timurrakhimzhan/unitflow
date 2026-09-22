@@ -19,12 +19,18 @@ export class ProductSearchModel extends Model.Service<ProductSearchModel>()(
           }),
       });
 
+      // Both query ports reach the view: `results` says what the read is
+      // doing right now, `loaded` is the last catalog the endpoint returned.
+      // While a keystroke changes the dependencies, `results` is Initial and
+      // `loaded` still holds the previous matches — which is what keeps the
+      // list from blanking on every letter.
       const searchState = Store.combine(
-        [query, category, results.state],
-        (query, category, results) => ({
+        [query, category, results.state, results.data],
+        (query, category, results, loaded) => ({
           query,
           category,
           results,
+          loaded,
         }),
       );
 

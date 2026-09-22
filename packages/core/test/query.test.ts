@@ -230,6 +230,138 @@ describe("Query", () => {
     }).pipe(Effect.provide(testRegistry)),
   );
 
+  describe("dependency changes", () => {
+    it.effect("the state drops the old answer in the dependency's own write", () =>
+      Effect.gen(function* () {
+        const backend = gatedRequest<string>();
+        const dep = Store.make("a");
+        const query = yield* Query.make({ stores: { dep }, handler: () => backend.request });
+
+        yield* awaitCondition(() => backend.gates.length === 1);
+        yield* Deferred.succeed(backend.gateAt(0), "A");
+        yield* Store.waitFor(query.state, (result) => successValue(result) === "A");
+
+        // No `allSettled`, no `yieldNow`: the very next synchronous read must
+        // already be free of the previous project's answer. Anything later
+        // would be a window where the view renders A's data under B.
+        yield* Store.set(dep, "b");
+
+        const during = yield* Store.get(query.state);
+        assert.isTrue(AsyncResult.isInitial(during));
+        assert.isTrue(during.waiting);
+        assert.isNull(successValue(during));
+      }).pipe(Effect.provide(testRegistry)),
+    );
+
+    it.effect("a dependency rewritten with an equal value does not refetch", () =>
+      Effect.gen(function* () {
+        const seen: Array<string> = [];
+        const dep = Store.make({ id: "a" });
+        const query = yield* Query.make({
+          stores: { dep },
+          handler: ({ dep }) =>
+            Effect.sync(() => {
+              seen.push(dep.id);
+              return dep.id.toUpperCase();
+            }),
+        });
+
+        yield* Store.waitFor(query.state, (result) => successValue(result) === "A");
+        // A fresh object with the same contents — what a combined dependency
+        // hands over whenever anything else it is derived from is written.
+        yield* Registry.allSettled(Store.set(dep, { id: "a" }));
+        yield* settlePipelines;
+
+        assert.deepStrictEqual(seen, ["a"]);
+        assert.strictEqual(successValue(yield* Store.get(query.state)), "A");
+      }).pipe(Effect.provide(testRegistry)),
+    );
+
+    it.effect("a refresh of the same dependencies keeps the value while waiting", () =>
+      Effect.gen(function* () {
+        const backend = gatedRequest<string>();
+        const dep = Store.make("a");
+        const query = yield* Query.make({ stores: { dep }, handler: () => backend.request });
+
+        yield* awaitCondition(() => backend.gates.length === 1);
+        yield* Deferred.succeed(backend.gateAt(0), "A");
+        yield* Store.waitFor(query.state, (result) => successValue(result) === "A");
+
+        yield* Event.emit(query.refresh);
+        yield* awaitCondition(() => backend.gates.length === 2);
+
+        const waiting = yield* Store.get(query.state);
+        assert.isTrue(AsyncResult.isSuccess(waiting));
+        assert.isTrue(waiting.waiting);
+        assert.strictEqual(successValue(waiting), "A");
+      }).pipe(Effect.provide(testRegistry)),
+    );
+
+    it.effect("data keeps the last answer across a dependency change", () =>
+      Effect.gen(function* () {
+        const backend = gatedRequest<string>();
+        const dep = Store.make("a");
+        const query = yield* Query.make({ stores: { dep }, handler: () => backend.request });
+
+        yield* awaitCondition(() => backend.gates.length === 1);
+        yield* Deferred.succeed(backend.gateAt(0), "A");
+        yield* Store.waitFor(query.state, (result) => successValue(result) === "A");
+
+        yield* Store.set(dep, "b");
+        // The state has nothing, `data` still has what the endpoint returned:
+        // this is the pair a search-as-you-type view renders from.
+        assert.isNull(successValue(yield* Store.get(query.state)));
+        assert.deepStrictEqual(yield* Store.get(query.data), Option.some("A"));
+
+        yield* awaitCondition(() => backend.gates.length === 2);
+        yield* Deferred.succeed(backend.gateAt(1), "B");
+        yield* Store.waitFor(query.state, (result) => successValue(result) === "B");
+        assert.deepStrictEqual(yield* Store.get(query.data), Option.some("B"));
+      }).pipe(Effect.provide(testRegistry)),
+    );
+
+    it.effect("data is left alone by a failed reload", () =>
+      Effect.gen(function* () {
+        let calls = 0;
+        const query = yield* Query.make(
+          Effect.suspend(() => {
+            calls += 1;
+            return calls === 1 ? Effect.succeed("one") : Effect.fail("boom" as const);
+          }),
+        );
+
+        yield* Store.waitFor(query.state, (result) => successValue(result) === "one");
+        yield* Registry.allSettled(Event.emit(query.refresh));
+
+        assert.isTrue(AsyncResult.isFailure(yield* Store.get(query.state)));
+        assert.deepStrictEqual(yield* Store.get(query.data), Option.some("one"));
+      }).pipe(Effect.provide(testRegistry)),
+    );
+
+    it.effect("a slow answer to the old dependencies never lands after the new one", () =>
+      Effect.gen(function* () {
+        const backend = gatedRequest<string>();
+        const dep = Store.make("a");
+        const query = yield* Query.make({ stores: { dep }, handler: () => backend.request });
+
+        yield* awaitCondition(() => backend.gates.length === 1);
+        yield* Store.set(dep, "b");
+        yield* awaitCondition(() => backend.gates.length === 2);
+
+        // B answers first, then A's request finally comes back.
+        yield* Deferred.succeed(backend.gateAt(1), "B");
+        yield* Store.waitFor(query.state, (result) => successValue(result) === "B");
+        yield* Deferred.succeed(backend.gateAt(0), "A");
+        yield* settlePipelines;
+
+        const settled = yield* Store.get(query.state);
+        assert.strictEqual(successValue(settled), "B");
+        assert.isFalse(settled.waiting);
+        assert.deepStrictEqual(yield* Store.get(query.data), Option.some("B"));
+      }).pipe(Effect.provide(testRegistry)),
+    );
+  });
+
   describe("makeInfinite", () => {
     /** Pages of two items counting up from `start`, exhausted after 6. */
     const fetchPage = (start: number): Query.PageResult<number, number> => ({
@@ -292,6 +424,76 @@ describe("Query", () => {
         yield* Registry.allSettled(Store.set(start, 3));
         assert.deepStrictEqual(successValue(yield* Store.get(query.state)), [3, 4]);
         assert.isTrue(yield* Store.get(query.hasMore));
+      }).pipe(Effect.provide(testRegistry)),
+    );
+
+    it.effect("loadMore between a dependency change and its first page is a no-op", () =>
+      Effect.gen(function* () {
+        const seen: Array<number> = [];
+        const start = Store.make(1);
+        const query = yield* Query.makeInfinite({
+          stores: { start },
+          initialCursor: 0,
+          handler: ({ start }, cursor) =>
+            Effect.sync(() => {
+              seen.push(cursor);
+              return fetchPage(cursor === 0 ? start : cursor);
+            }),
+        });
+
+        yield* Store.waitFor(query.state, (result) => successValue(result)?.length === 2);
+        yield* Registry.allSettled(Event.emit(query.loadMore));
+        assert.deepStrictEqual(seen, [0, 3]);
+
+        // The cursor belonged to the old dependencies and is gone with them,
+        // so this release finds nothing to continue and asks for nothing.
+        yield* Store.set(start, 5);
+        yield* Registry.allSettled(Event.emit(query.loadMore));
+        assert.deepStrictEqual(seen, [0, 3, 0]);
+        assert.deepStrictEqual(successValue(yield* Store.get(query.state)), [5, 6]);
+      }).pipe(Effect.provide(testRegistry)),
+    );
+
+    it.effect("a page in flight never appends after the dependencies changed", () =>
+      Effect.gen(function* () {
+        const gates: Array<Deferred.Deferred<Query.PageResult<number, number>>> = [];
+        const gateAt = (index: number) => {
+          const gate = gates[index];
+          if (gate === undefined) throw new Error(`Missing gate ${index}`);
+          return gate;
+        };
+        const start = Store.make(1);
+        const query = yield* Query.makeInfinite({
+          stores: { start },
+          initialCursor: 0,
+          handler: () =>
+            Effect.suspend(() => {
+              const gate = Deferred.makeUnsafe<Query.PageResult<number, number>>();
+              gates.push(gate);
+              return Deferred.await(gate);
+            }),
+        });
+
+        yield* awaitCondition(() => gates.length === 1);
+        yield* Deferred.succeed(gateAt(0), { data: [1, 2], next: Option.some(3) });
+        yield* Store.waitFor(query.state, (result) => successValue(result)?.length === 2);
+
+        yield* Event.emit(query.loadMore);
+        yield* awaitCondition(() => gates.length === 2);
+
+        yield* Store.set(start, 9);
+        yield* awaitCondition(() => gates.length === 3);
+
+        // The page requested under `start: 1` answers late — it belongs to a
+        // list that is no longer on screen and must not be appended to the
+        // new one.
+        yield* Deferred.succeed(gateAt(1), { data: [3, 4], next: Option.none() });
+        yield* Deferred.succeed(gateAt(2), { data: [9, 10], next: Option.none() });
+        yield* Store.waitFor(query.state, (result) => successValue(result)?.length === 2);
+        yield* settlePipelines;
+
+        assert.deepStrictEqual(successValue(yield* Store.get(query.state)), [9, 10]);
+        assert.deepStrictEqual(yield* Store.get(query.data), Option.some([9, 10]));
       }).pipe(Effect.provide(testRegistry)),
     );
 
@@ -468,6 +670,27 @@ describe("Query", () => {
 
         yield* Deferred.succeed(backend.gateAt(0), ["fresh"]);
         yield* Store.waitFor(query.state, (result) => successValue(result)?.join(",") === "fresh");
+      }).pipe(Effect.provide(persistLayer)),
+    );
+
+    it.effect("a restored value seeds data too", () =>
+      Effect.gen(function* () {
+        const kvs = yield* KeyValueStore.KeyValueStore;
+        yield* kvs.set("users", JSON.stringify({ savedAt: Date.now(), value: ["stored"] }));
+
+        const backend = gatedRequest<ReadonlyArray<string>>();
+        const query = yield* Query.make(backend.request).pipe(
+          Query.persist({ key: "users", schema: Schema.Array(Schema.String) }),
+        );
+
+        yield* Store.waitFor(query.data, Option.isSome);
+        // A view that reads `data` to tolerate staleness is exactly the one
+        // that should see the restored copy, not wait for the network.
+        assert.deepStrictEqual(yield* Store.get(query.data), Option.some(["stored"]));
+
+        yield* Deferred.succeed(backend.gateAt(0), ["fresh"]);
+        yield* Store.waitFor(query.state, (result) => successValue(result)?.join(",") === "fresh");
+        assert.deepStrictEqual(yield* Store.get(query.data), Option.some(["fresh"]));
       }).pipe(Effect.provide(persistLayer)),
     );
 

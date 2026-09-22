@@ -22,6 +22,7 @@ A query owns:
 ```ts
 {
   state: Store.Store<AsyncResult.AsyncResult<A, E>>;
+  data: Store.Output<Option.Option<A>>;
   refresh: Event.Event<void>;
   stores: Deps;
 }
@@ -31,6 +32,9 @@ A query owns:
 state and loads eagerly during construction. A successful load writes
 `AsyncResult.success(value)`. A failed reload writes failure state while keeping
 the previous value available through `AsyncResult.value(...)`.
+
+`data` is the last value the handler returned, `None` until the first success.
+See [Which Port to Read](#which-port-to-read).
 
 ## Simple Read
 
@@ -107,7 +111,48 @@ const results = yield* Query.make({
 ```
 
 Dependency stores describe when the read should reload. The model changes
-ordinary stores; the query reruns with fresh dependency values.
+ordinary stores; the query reruns with fresh dependency values. A dependency
+counts as changed when its new value is not `Equal.equals` to the old one, so
+a combined dependency recomputed into an equal value does not refetch.
+
+When a dependency does change, the state drops the old answer in the same
+step as the dependency write — `AsyncResult.initial(true)`, no value — and
+only then reloads. Nothing, not even a synchronous reader, observes the answer
+to the previous dependencies under the new ones. That is what makes `!waiting`
+mean "this value answers the current dependencies", and it is why a screen
+keyed by a route parameter needs no bookkeeping of its own to tell whose
+answer it is holding.
+
+A `refresh` of the *same* dependencies is the opposite case and keeps the
+value on screen: `AsyncResult.waiting(previous)`, stale-while-revalidate.
+
+A query has one answer in flight. Whatever supersedes it — a dependency
+change, a restart — cancels it, and a late answer from before never lands.
+
+## Which Port to Read
+
+`state` is the lifecycle of the current read; `data` is the last value the
+endpoint returned. They differ exactly while a new answer is in flight after
+the dependencies changed:
+
+| | `state` | `data` |
+|---|---|---|
+| Dependencies changed, loading | `Initial`, waiting | previous value |
+| Loaded | `Success(value)` | same value |
+| Reload of the same dependencies | `Success(previous)`, waiting | previous value |
+| Failed reload | `Failure`, previous value inside | last **successful** value |
+
+Read `state` when showing data from the previous dependencies would be wrong:
+a project screen keyed by `projectId` must not render project A's frames under
+project B's name.
+
+Read `data` (with `state` for the spinner and the error) when the previous
+value is an honest placeholder: search-as-you-type, filters, a paginated table
+where blanking the list on every keystroke is worse than showing the previous
+one dimmed.
+
+`data` does not say which dependency values produced it — that is the whole
+point of it, and the reason it is not the default thing to render.
 
 ## Reading AsyncResult
 
@@ -241,7 +286,10 @@ const feed = yield* Query.makeInfinite({
 `loadMore` is a no-op while the query is waiting, before a value exists, or
 after `hasMore` becomes false. A failed `loadMore` keeps the loaded value and
 stays retryable. `refresh` and any dependency change restart from the first
-page.
+page — the cursor belongs to the dependencies that produced it, so it is
+dropped with them, and a page still in flight is cancelled rather than
+appended to the new list. `data` holds the whole accumulated list, so it grows
+with every appended page.
 
 ## Persistence
 
@@ -273,7 +321,8 @@ Persistence is best-effort and never affects the query itself:
 
 - Every settled success is encoded through the schema and saved with a
   timestamp. Failures are never persisted.
-- On construction, a stored entry seeds the state — marked waiting — while the
+- On construction, a stored entry seeds the state and `data` — the state
+  marked waiting — while the
   initial load is in flight. A load that settles first wins.
 - An entry that fails to decode, or is older than `timeToLive`, is a cache
   miss: the schema is the migration story, old shapes fall back to the

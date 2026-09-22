@@ -63,11 +63,15 @@ const VirtualResults = ({ products }: { readonly products: ReadonlyArray<Product
 
 const Results = ({
   results,
+  loaded,
 }: {
   readonly results: AsyncResult.AsyncResult<ReadonlyArray<Product>, unknown>;
+  readonly loaded: Option.Option<ReadonlyArray<Product>>;
 }) => {
-  const value = AsyncResult.value(results);
-  if (Option.isNone(value)) {
+  // The list renders from `loaded`: a search still in flight leaves `results`
+  // without a value, and the previous matches are a better placeholder than
+  // a blank panel. `results` is what says whether they are still current.
+  if (Option.isNone(loaded)) {
     return AsyncResult.isFailure(results) ? (
       <div className="result-state error">Catalog unavailable</div>
     ) : (
@@ -75,11 +79,18 @@ const Results = ({
     );
   }
 
-  if (value.value.length === 0) {
+  if (loaded.value.length === 0) {
     return <div className="result-state">No matches</div>;
   }
 
-  return <VirtualResults products={value.value} />;
+  return (
+    <div className={results.waiting || AsyncResult.isInitial(results) ? "stale" : undefined}>
+      {AsyncResult.isFailure(results) ? (
+        <div className="result-state error">Catalog unavailable — showing the last results</div>
+      ) : null}
+      <VirtualResults products={loaded.value} />
+    </div>
+  );
 };
 
 export const ProductSearchApp = View.make(ProductSearchModel, (unit) => (
@@ -112,6 +123,6 @@ export const ProductSearchApp = View.make(ProductSearchModel, (unit) => (
       </button>
     </section>
 
-    <Results results={unit.searchState.results} />
+    <Results results={unit.searchState.results} loaded={unit.searchState.loaded} />
   </main>
 ));

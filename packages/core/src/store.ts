@@ -712,57 +712,76 @@ const uniqueSources = (
   sources: ReadonlyArray<Output<any>>,
 ): ReadonlyArray<Output<any>> => [...new Map(sources.map((source) => [source.id, source])).values()];
 
-/** Creates an event that emits the store's value on every subsequent store
- * emission. The current replayed value is skipped, so construction does not
- * count as a change. */
-export const changed = <A>(
+/**
+ * INTERNAL. Runs `onChange` with the store's new value whenever that value
+ * changes, deduped by `Object.is`. For every source but a flattened one this
+ * runs *inside the dispatch of the write that changed it* — the callback sees
+ * the same synchronous step, so a state transition it performs lands before
+ * any observer can read a half-updated pair. Flattened sources keep the
+ * two-level watcher and therefore run a scheduler hop later; the returned
+ * effect still completes only once that watcher is subscribed, so a write
+ * right after construction is never missed.
+ *
+ * The callback runs on the writing fiber: keep it synchronous and cheap, and
+ * push anything effectful onto an event or a forked pipeline.
+ *
+ * Not part of the public API surface — {@link changed} is this plus an event
+ * dispatch, and `Query` uses it to move its state in the same dispatch as the
+ * dependency write.
+ */
+export const onChangeUnsafe = <A>(
   store: Output<A>,
-  options?: Pick<Event.Options, "name">,
-): Effect.Effect<Event.Event<A>, never, Registry | InstanceScope> =>
+  onChange: (value: A) => void,
+  options?: {
+    /** What counts as the same value. `Object.is` by default; `Store.stream`
+     * dedupes a combined store with `Equal.equals`, so a caller replacing a
+     * stream subscription passes that to keep a recomputed-but-equal value
+     * from counting as a change. */
+    readonly equals?: (a: A, b: A) => boolean;
+  },
+): Effect.Effect<void, never, Registry | InstanceScope> =>
   Effect.gen(function* () {
-    const changedEvent = Event.make<A>(
-      options?.name !== undefined
-        ? { name: options.name }
-        : store.name === undefined
-          ? undefined
-          : { name: `${store.name}.changed` },
-    );
+    const same = options?.equals ?? Object.is;
     const sources = uniqueSources(watchSources(store));
 
     // Flattened sources need the two-level stream watcher; everything else
     // takes the fused path below: a synchronous store listener recomputes,
-    // dedupes, and dispatches into the event — no watcher pipeline at all.
+    // dedupes, and calls back — no watcher pipeline at all.
     if (sources.some(isFlatten)) {
       let current = yield* get(store);
       const emitIfChanged = Effect.flatMap(get(store), (value) =>
-        Effect.suspend(() => {
-          if (Object.is(value, current)) return Effect.void;
+        Effect.sync(() => {
+          if (same(value, current)) return;
           current = value;
-          return Event.emit(changedEvent, value);
+          onChange(value);
         }),
       );
       yield* Effect.forEach(
         sources,
         (source) =>
-          Registry.run(
-            stream(source).pipe(
-              Stream.drop(1),
-              Stream.mapEffect(() => emitIfChanged),
-            ),
-          ),
+          Effect.gen(function* () {
+            // The replayed current value resolves `subscribed`: the watcher is
+            // live from here on, so the caller may return.
+            const subscribed = yield* Deferred.make<void>();
+            yield* Registry.run(
+              stream(source).pipe(
+                Stream.tap(() => Deferred.succeed(subscribed, undefined)),
+                Stream.drop(1),
+                Stream.mapEffect(() => emitIfChanged),
+              ),
+            );
+            yield* Deferred.await(subscribed);
+          }),
         { discard: true },
       );
-      return changedEvent;
+      return;
     }
 
     const registry = yield* Registry;
     const scope = yield* requiredOwnerScope;
-    // The event channel binds to the declaring scope now — the same owner the
-    // watcher pipeline's subscription would have bound it to.
-    const channel = yield* Event.pubsub(changedEvent);
     // Materialize every watched ref, so the sync evaluator always resolves.
     yield* Effect.forEach(sources, ref, { discard: true });
-    let current: unknown = yield* get(store);
+    let current: A = yield* get(store);
     const needsMemo = isCombined(store);
     let closed = false;
     // Reads at dispatch time (not the offered value): a recomputation always
@@ -771,17 +790,12 @@ export const changed = <A>(
       offer() {
         if (closed) return;
         const value = evalSync(registry, store, needsMemo ? new Map() : undefined);
-        if (value === Unresolved || Object.is(value, current)) return;
-        current = value;
-        // The store may have been named after this event was created (port
-        // naming runs when `make` returns) — inherit lazily.
-        if (changedEvent.name === undefined && store.name !== undefined) {
-          // eslint-disable-next-line revizo/no-type-assertion
-          (changedEvent as { name?: string }).name = `${store.name}.changed`;
-        }
         // The evaluator returns this source's value type.
         // eslint-disable-next-line revizo/no-type-assertion
-        Event.dispatchUnsafe(registry, channel, changedEvent, value as A);
+        if (value === Unresolved || same(value as A, current)) return;
+        // eslint-disable-next-line revizo/no-type-assertion
+        current = value as A;
+        onChange(current);
       },
       close() {
         closed = true;
@@ -809,6 +823,54 @@ export const changed = <A>(
         }
       }),
     );
+  });
+
+/**
+ * INTERNAL. Writes `value` into an already-materialized store from inside a
+ * synchronous dispatch — the write a callback of {@link onChangeUnsafe} can
+ * perform without leaving that dispatch. Reports whether it happened: an
+ * unmaterialized store has no ref to write, and the caller falls back to the
+ * effectful path.
+ */
+export const setUnsafeNow = <A>(
+  registry: RegistryService,
+  store: Store<A>,
+  value: A,
+): boolean => {
+  const subscriptionRef = registry.stores.get(store.id);
+  if (subscriptionRef === undefined) return false;
+  writeUnsafe(registry, subscriptionRef, store, value);
+  return true;
+};
+
+/** Creates an event that emits the store's value on every subsequent store
+ * emission. The current replayed value is skipped, so construction does not
+ * count as a change. */
+export const changed = <A>(
+  store: Output<A>,
+  options?: Pick<Event.Options, "name">,
+): Effect.Effect<Event.Event<A>, never, Registry | InstanceScope> =>
+  Effect.gen(function* () {
+    const changedEvent = Event.make<A>(
+      options?.name !== undefined
+        ? { name: options.name }
+        : store.name === undefined
+          ? undefined
+          : { name: `${store.name}.changed` },
+    );
+    const registry = yield* Registry;
+    // The event channel binds to the declaring scope now — the same owner the
+    // watcher pipeline's subscription would have bound it to.
+    const channel = yield* Event.pubsub(changedEvent);
+    yield* onChangeUnsafe(store, (value) => {
+      // The store may have been named after this event was created (port
+      // naming runs when `make` returns) — inherit lazily.
+      if (changedEvent.name === undefined && store.name !== undefined) {
+        // eslint-disable-next-line revizo/no-type-assertion
+        (changedEvent as { name?: string }).name = `${store.name}.changed`;
+      }
+      Event.dispatchUnsafe(registry, channel, changedEvent, value);
+    });
     return changedEvent;
   });
 
