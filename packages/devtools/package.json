@@ -1,6 +1,6 @@
 {
   "name": "@unitflow/devtools",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "Unitflow runtime inspector bridge and MCP server for agent-driven debugging.",
   "license": "MIT",
@@ -39,10 +39,12 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.0-rc.115",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.5.13",
     "effect": "4.0.0-rc.115",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "vitest": "5.0.1"
   },
   "peerDependencies": {
     "effect": ">=4.0.0-rc.115 <5.0.0"

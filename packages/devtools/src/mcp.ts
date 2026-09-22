@@ -3,6 +3,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as McpProtocol from "effect/unstable/ai/McpProtocol";
 import * as McpServer from "effect/unstable/ai/McpServer";
 import * as Tool from "effect/unstable/ai/Tool";
 import * as Toolkit from "effect/unstable/ai/Toolkit";
@@ -19,7 +20,7 @@ export interface AppHubService {
   readonly connected: () => boolean;
 }
 
-export class HubError extends Schema.ErrorClass<HubError>("unitflow/devtools/HubError")({
+export class HubError extends Schema.Error<HubError>("unitflow/devtools/HubError")({
   _tag: Schema.tag("HubError"),
   message: Schema.String,
 }) {}
@@ -229,6 +230,14 @@ export const toolkitLayer = toolkit.toLayer(
   }),
 );
 
+/** The MCP protocol revisions the stdio server negotiates, newest first. */
+export const PROTOCOLS = [
+  McpProtocol.v2025_11_25,
+  McpProtocol.v2025_06_18,
+  McpProtocol.v2025_03_26,
+  McpProtocol.v2024_11_05,
+] as const;
+
 export interface ServerOptions extends HubOptions {
   readonly name?: string;
   readonly version?: string;
@@ -244,6 +253,10 @@ export const layer = (options?: ServerOptions) =>
       McpServer.layerStdio({
         name: options?.name ?? "unitflow-devtools",
         version: options?.version ?? "0.1.0",
+        // Every adapter Effect ships: the client picks one during
+        // initialization, and an editor pinned to an older MCP revision
+        // still reaches the same tools.
+        protocols: PROTOCOLS,
       }),
     ),
     Layer.provideMerge(layerHub(options)),

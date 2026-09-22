@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Publishes @unitflow/{core,react,router} to npm — but only whichever ones
+// Publishes @unitflow/{core,react,router,devtools} to npm — but only whichever ones
 // have a package.json version that isn't live in the registry yet. Order
-// matters: core before react before router, so a dependent's resolved
+// matters: core before its dependents, so a dependent's resolved
 // "@unitflow/core": "^x.y.z" range (via `pnpm pack`, which reads the LOCAL
 // workspace version, not the registry) is already installable by the time
 // it's published.
@@ -10,7 +10,7 @@ import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const packages = ["core", "react", "router"];
+const packages = ["core", "react", "router", "devtools"];
 
 const publishedVersion = (name) => {
   try {

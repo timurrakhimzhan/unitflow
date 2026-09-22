@@ -7,6 +7,7 @@ on:
       - "packages/core/package.json"
       - "packages/react/package.json"
       - "packages/router/package.json"
+      - "packages/devtools/package.json"
 
 permissions:
   contents: read
@@ -38,9 +39,9 @@ jobs:
 
       - run: pnpm packages:test
 
-      # Publishes whichever of core/react/router have a package.json version
-      # not yet live on npm — in dependency order (core, then react, then
-      # router), so a dependent's resolved "@unitflow/core": "^x.y.z" range
+      # Publishes whichever of core/react/router/devtools have a package.json
+      # version not yet live on npm — in dependency order (core first), so a
+      # dependent's resolved "@unitflow/core": "^x.y.z" range
       # is already installable by the time it's published. Each package's
       # Trusted Publisher is already configured (npm trust github ...),
       # pointing at this exact workflow file.
